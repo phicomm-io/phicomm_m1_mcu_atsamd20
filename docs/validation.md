@@ -77,4 +77,4 @@ build/analysis-venv/bin/python tools/verify_runtime_stock.py /path/to/private-ba
 build/analysis-venv/bin/python tools/verify_peripherals_stock.py /path/to/private-backup.bin
 ```
 
-公开 CI 运行主机测试、ASan/UBSan、两类 ARM 构建、ARM 时钟 MMIO 模型及实际 OTA 负载的接收/搬运模型，上传 OTA 候选和调试/恢复产物（含 `platform-clock-verification.json`）；原厂镜像需要用户自己的备份，不进入公开 CI。CI 不发布正式 Release、不操作设备。下一步仍需独立样机上的启动/驱动/联网互通及受控升级恢复验收。
+公开 CI 运行主机测试、ASan/UBSan、两类 ARM 构建、ARM 时钟 MMIO 模型及实际 OTA 负载的接收/搬运模型，上传 OTA 候选和调试/恢复产物（含 `platform-clock-verification.json`）；原厂镜像需要用户自己的备份，不进入公开 CI。自 `v0.9.1` 起版本 tag 自动发布 GitHub 开发预览 Release，仍标记 `hardware_validation=NOT_RUN`，不操作设备。下一步仍需独立样机上的启动/驱动/联网互通及受控升级恢复验收。

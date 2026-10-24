@@ -26,4 +26,6 @@ make test ota VERSION_TAG=v0.9.0
 
 该模式要求 tag 精确指向 HEAD 且源码干净；错误 tag、脏源码或 UART 版本超长均报错。后续版本在通过验证的提交上新建递增 tag，例如 `v0.9.1`，不要移动已有 tag。
 
-GitHub Actions 拉取完整 Git 历史与 tag，tag 构建自动使用上述严格校验；分支和 PR 构建也携带对应提交 hash。Artifact 名称包含解析出的版本，例如 `m1-mcu-ota-0.9.0-abcdef`。tag 用于标识候选构建，不会自动刷机或创建正式 GitHub Release，实机验收状态仍单独记录。
+GitHub Actions 拉取完整 Git 历史与 tag，tag 构建自动使用上述严格校验；分支和 PR 构建也携带对应提交 hash。Artifact 名称包含解析出的版本，例如 `m1-mcu-ota-0.9.0-abcdef`。
+
+自 `v0.9.1` 起，推送版本 tag 且测试/构建通过，CI 自动创建 GitHub 开发预览 Release。tag 必须位于 `main` 历史中，说明必须来自该 tag 已提交的唯一 Release Log 章节。已有 `v0.9.0` 保持原样，不补改旧 tag。重跑核对已有附件和说明，禁止覆盖不同内容；实机状态仍单独记录，不自动刷机。维护步骤见 [发布流程](release/README.md)。

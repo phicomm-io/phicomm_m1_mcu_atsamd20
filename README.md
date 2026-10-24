@@ -51,7 +51,7 @@ OTA 包：`build/ota/m1-mcu-ota.bin`、`.json`、`SHA256SUMS`。其他产物：`
 
 版本与 Wi-Fi MCU 一样由 Git tag 生成，从 `v0.9.0` 起步，形如 `0.9.0-abcdef`（六位 commit hash）。构建记录与 `0x11` 查询使用同一版本快照，脏构建会标记，详见 [版本规则](docs/versioning.md)。
 
-[验证记录](docs/validation.md) 分开记录软件、指令对照和实物证据。公开 CI 运行主机测试、ASan/UBSan、应用/Boot 构建、ARM 时钟寄存器模型及实际 OTA 镜像的接收/搬运模型验证，上传 OTA 候选及独立调试/恢复产物。下载与使用见 [OTA 文档](docs/ota.md)，Wi-Fi MCU 控制 PWM/屏幕见 [调试协议](docs/debug-protocol.md)。不自动刷机或发布正式 Release。
+[验证记录](docs/validation.md) 分开记录软件、指令对照和实物证据。公开 CI 运行主机测试、ASan/UBSan、应用/Boot 构建、ARM 时钟寄存器模型及实际 OTA 镜像的接收/搬运模型验证。推送 `vMAJOR.MINOR.PATCH` tag 后，检查全部通过会自动发布 GitHub 开发预览 Release，附带 OTA、调试恢复包及 SHA-256；说明取自该 tag 中的 [Release Log](docs/release/Release-Log.md)，见 [发布流程](docs/release/README.md)。分支/PR 构建只上传 Actions 候选。不自动刷机。下载与使用见 [OTA 文档](docs/ota.md)，Wi-Fi MCU 控制 PWM/屏幕见 [调试协议](docs/debug-protocol.md)。
 
 ## 升级与恢复边界
 

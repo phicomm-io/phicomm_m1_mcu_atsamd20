@@ -8,6 +8,8 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     env:
       VERSION_TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
     steps:
@@ -43,6 +45,7 @@ jobs:
           path: build/ota/
           if-no-files-found: error
           retention-days: 30
+
       - name: Upload ELF and SWD recovery artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -59,3 +62,41 @@ jobs:
             build/platform-clock-verification.json
           if-no-files-found: error
           retention-days: 30
+
+  release:
+    name: Publish MCU GitHub Release
+    needs: verify
+    if: startsWith(github.ref, 'refs/tags/v') && github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    concurrency:
+      group: m1-mcu-release-${{ github.ref }}
+      cancel-in-progress: false
+    env:
+      TAG_NAME: ${{ github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify exact tag and main ancestry
+        run: |
+          python3 tools/check_version.py --tag "$TAG_NAME"
+          git merge-base --is-ancestor HEAD origin/main
+      - uses: actions/download-artifact@v4
+        with:
+          name: m1-mcu-ota-${{ needs.verify.outputs.version }}
+          path: build/incoming/ota
+      - uses: actions/download-artifact@v4
+        with:
+          name: m1-mcu-debug-recovery-${{ needs.verify.outputs.version }}
+          path: build/incoming/debug
+      - name: Prepare frozen notes and verified release assets
+        run: |
+          python3 tools/release/prepare.py "$TAG_NAME" "$GITHUB_SHA" --ota build/incoming/ota --debug build/incoming/debug --output build/release
+          cd build/release
+          sha256sum -c SHA256SUMS
+      - name: Publish immutable development preview
+        run: python3 tools/release/publish.py "$TAG_NAME" --directory build/release
