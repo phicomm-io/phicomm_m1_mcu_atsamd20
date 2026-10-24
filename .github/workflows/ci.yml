@@ -8,8 +8,23 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-24.04
+    env:
+      VERSION_TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Resolve version from Git tag and commit
+        id: version
+        run: |
+          make version
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          record = json.loads(Path('build/version.json').read_text())
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('version=' + record['version'] + '\n')
+          PY
       - name: Host behavior and fault-injection tests
         run: make test sanitize
       - name: ARM toolchain
@@ -24,18 +39,19 @@ jobs:
       - name: Upload MCU OTA candidate
         uses: actions/upload-artifact@v4
         with:
-          name: m1-mcu-ota-${{ github.sha }}
+          name: m1-mcu-ota-${{ steps.version.outputs.version }}
           path: build/ota/
           if-no-files-found: error
           retention-days: 30
       - name: Upload ELF and SWD recovery artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: m1-mcu-debug-recovery-${{ github.sha }}
+          name: m1-mcu-debug-recovery-${{ steps.version.outputs.version }}
           path: |
             build/m1-app.elf
             build/m1-app.map
             build/m1-app.json
+            build/version.json
             build/m1-boot.bin
             build/m1-boot.elf
             build/m1-boot.map

@@ -63,6 +63,7 @@ def verify(blob):
 
     with tempfile.TemporaryDirectory(prefix="m1-core-verify-") as tmp:
         libpath = Path(tmp) / "core.so"
+        subprocess.run(['make', '-s', '-C', str(ROOT), 'version'], check=True, stdout=subprocess.DEVNULL)
         subprocess.run(["cc", "-std=c11", "-O2", "-shared", "-fPIC", "-I", str(ROOT/"include"),
                         str(ROOT/"src/core.c"), "-o", str(libpath)], check=True)
         lib = ct.CDLL(str(libpath))

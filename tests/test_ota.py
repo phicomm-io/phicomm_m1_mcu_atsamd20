@@ -57,13 +57,16 @@ class OTATests(unittest.TestCase):
             data = image(512)
             app.write_bytes(data)
             meta = root / 'app.json'
-            record = dict(artifact=app.name, sha256=hashlib.sha256(data).hexdigest(), bytes=len(data), source_commit='test', source_dirty=True)
+            record = dict(artifact=app.name, sha256=hashlib.sha256(data).hexdigest(), bytes=len(data), source_commit='test', source_dirty=True,
+                          version='0.9.0-abc123-dirty', uart_version='0.9.0-abc123-d', git_tag='v0.9.0')
             meta.write_text(json.dumps(record))
             result = ota.package(app, meta, root / 'ota')
             self.assertEqual((root / 'ota/m1-mcu-ota.bin').read_bytes(), data)
             self.assertFalse(result['image_signature'])
             self.assertFalse(result['release'])
             self.assertTrue(result['source_dirty'])
+            for key in ('version', 'uart_version', 'git_tag', 'source_commit'):
+                self.assertEqual(result[key], record[key])
             self.assertEqual(result['data_frames'], 3)
             for line in (root / 'ota/SHA256SUMS').read_text().splitlines():
                 sha, name = line.split()

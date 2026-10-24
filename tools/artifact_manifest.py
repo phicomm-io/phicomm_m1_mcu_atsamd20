@@ -13,9 +13,10 @@ if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('image',type=Path);p.add_argument('--compiler',required=True)
     a=p.parse_args();data=a.image.read_bytes()
-    result={'artifact':a.image.name,'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest(),
-            'source_commit':output('git','rev-parse','HEAD'),
-            'source_dirty':bool(output('git','status','--porcelain','--untracked-files=normal')),
+    snapshot=json.loads((Path(__file__).resolve().parents[1]/'build/version.json').read_text())
+    result={**snapshot,'artifact':a.image.name,'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest(),
+            'source_commit':snapshot['git_commit'],
+            'source_dirty':snapshot['dirty'],
             'compiler':output(a.compiler,'--version').splitlines()[0],
             'hardware_validation':'NOT_RUN','release':False}
     a.image.with_suffix('.json').write_text(json.dumps(result,indent=2)+'\n')

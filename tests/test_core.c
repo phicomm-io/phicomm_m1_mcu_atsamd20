@@ -21,8 +21,9 @@ static void protocol(void)
     m1_sample_reply(&s.sample, r);
     assert(r[4] == 1 && r[5] == 0 && r[6] == 1);
     frame(f, 0x11); assert(m1_command(&s, f, r) == M1_REPLY);
-    assert(r[2] == strlen(M1_VERSION) && !memcmp(r + 3, M1_VERSION, r[2]));
-    assert(r[19] == 0x21 && r[18] == 0);
+    assert(r[2] == strlen(M1_UART_VERSION) && !memcmp(r + 3, M1_UART_VERSION, r[2]));
+    assert(r[19] == 0x21);
+    for (unsigned i = 3 + r[2]; i < 19; ++i) assert(r[i] == 0);
     frame(f, 2); f[2] = 50; f[3] = 0;
     assert(m1_command(&s, f, r) == M1_APPLIED && !s.display_on && s.brightness == 50);
     f[2] = 255; assert(m1_command(&s, f, r) == M1_BAD_FRAME && s.brightness == 50);

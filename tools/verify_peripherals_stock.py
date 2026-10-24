@@ -60,6 +60,7 @@ unsigned feed(const uint8_t *p) { for(unsigned i=0;i<32;++i) m1_runtime_rx(&r,M1
     with tempfile.TemporaryDirectory() as d:
         path = Path(d)
         (path / 'wrap.c').write_text(wrapper)
+        subprocess.run(['make', '-s', '-C', str(ROOT), 'version'], check=True, stdout=subprocess.DEVNULL)
         subprocess.run(['cc', '-std=c11', '-O2', '-shared', '-fPIC', '-I', str(ROOT / 'include'),
                         *map(str, (ROOT / 'src').glob('*.c')), str(path / 'wrap.c'), '-o', str(path / 'pm.so')], check=True)
         lib = C.CDLL(str(path / 'pm.so'))

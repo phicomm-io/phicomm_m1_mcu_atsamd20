@@ -50,6 +50,7 @@ def verify(blob):
         assert u.reg_read(UC_ARM_REG_PC)==STOP,hex(at)
     with tempfile.TemporaryDirectory() as tmp:
         libpath=Path(tmp)/'runtime.so'
+        subprocess.run(['make','-s','-C',str(ROOT),'version'],check=True,stdout=subprocess.DEVNULL)
         subprocess.run(['cc','-std=c11','-O2','-shared','-fPIC','-I',str(ROOT/'include'),*[str(ROOT/'src'/f'{n}.c') for n in ('core','display','climate')],'-o',str(libpath)],check=True)
         lib=C.CDLL(str(libpath));lib.m1_display_render.argtypes=[C.POINTER(State),C.c_void_p]
         lib.m1_init.argtypes=[C.POINTER(State)]

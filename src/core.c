@@ -92,7 +92,7 @@ m1_result m1_command(m1_state *s, const uint8_t f[M1_COMMAND_BYTES], uint8_t rep
         return M1_REPLY;
     case 0x0e: s->buzzer_on = f[2] != 0; return M1_APPLIED;
     case 0x11: {
-        static const char version[] = M1_VERSION;
+        static const char version[] = M1_UART_VERSION;
         _Static_assert(sizeof(version) - 1 <= 16, "version exceeds UART payload");
         envelope(reply, 0x11); reply[2] = sizeof(version) - 1;
         for (size_t i = 0; i < sizeof(version) - 1; ++i) reply[3 + i] = (uint8_t)version[i];

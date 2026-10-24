@@ -1,16 +1,16 @@
 # 构建和下载 MCU OTA 镜像
 
-从 GitHub 仓库 **Actions → Firmware, OTA artifacts and recovery checks → 成功的运行 → Artifacts** 下载 `m1-mcu-ota-<commit>`。push、pull_request 和手动 workflow_dispatch 都触发构建；保存 30 天。PR 构建对应合并测试提交，候选来源以包中 manifest 的 source_commit 为准。
+从 GitHub 仓库 **Actions → Firmware, OTA artifacts and recovery checks → 成功的运行 → Artifacts** 下载 `m1-mcu-ota-<version>`，例如 `m1-mcu-ota-0.9.0-abcdef`。版本由 `v0.9.0` 起步的 Git tag 加六位 commit hash 生成，见 [版本规则](versioning.md)。分支/tag push、pull_request 和手动 workflow_dispatch 都触发构建；保存 30 天。PR 构建对应合并测试提交，候选来源以包中 manifest 的 source_commit 为准。
 
 该包包含：
 
 | 文件 | 用途 |
 | --- | --- |
 | `m1-mcu-ota.bin` | 链接于 `0x4000` 的原始 ATSAMD20G18A 应用，无头部、无 Boot、无签名、无额外填充 |
-| `m1-mcu-ota.json` | 长度、SHA-256、源码提交/dirty、编译器、完整块数/尾长、地址与验证状态 |
+| `m1-mcu-ota.json` | 版本/tag/完整 commit hash/dirty、UART 版本、长度、SHA-256、编译器、完整块数/尾长、地址与验证状态 |
 | `SHA256SUMS` | 对上述两文件的 SHA-256 |
 
-`m1-mcu-debug-recovery-<commit>` 单独提供应用 ELF/map、Boot bin/ELF/map 及构建记录。**不要将 Boot 或整个 256 KiB 备份作为应用 OTA 负载。** 这是主控 MCU 升级，不能直接填入 EMW3080 联网模块固件更新地址。
+`m1-mcu-debug-recovery-<version>` 单独提供应用 ELF/map、Boot bin/ELF/map、版本快照及构建记录。**不要将 Boot 或整个 256 KiB 备份作为应用 OTA 负载。** 这是主控 MCU 升级，不能直接填入 EMW3080 联网模块固件更新地址。
 
 本地构建：
 
