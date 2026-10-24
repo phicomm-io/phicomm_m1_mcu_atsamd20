@@ -3,9 +3,9 @@ CROSS_COMPILE ?= arm-none-eabi-
 ARM_CC := $(CROSS_COMPILE)gcc
 HOST_FLAGS := -std=c11 -O2 -g -Wall -Wextra -Werror -Iinclude
 ARM_FLAGS := -std=gnu11 -Os -g -mcpu=cortex-m0plus -mthumb -ffreestanding -fno-builtin -ffunction-sections -fdata-sections -fno-unwind-tables -fno-asynchronous-unwind-tables -Wall -Wextra -Werror -Iinclude -Iplatform -Ithird_party/samd20/include -Ithird_party/cmsis/include
-SOURCES := src/core.c src/rtc.c src/display.c src/climate.c src/update.c src/runtime.c
+SOURCES := src/core.c src/rtc.c src/display.c src/climate.c src/update.c src/runtime.c src/debug.c
 PLATFORM := platform/startup.c platform/memory.c platform/samd20.c
-.PHONY: all test sanitize link-check firmware bootloader clean
+.PHONY: all test sanitize link-check firmware bootloader ota clean
 all: test firmware bootloader
 build:
 	mkdir -p $@
@@ -38,5 +38,8 @@ bootloader: | build
 	$(CROSS_COMPILE)objcopy -O binary build/m1-boot.elf build/m1-boot.bin
 	python3 tools/check_elf.py build/m1-boot.elf --boot
 	python3 tools/artifact_manifest.py build/m1-boot.bin --compiler $(ARM_CC)
+ota: firmware bootloader build/test_update
+	python3 tools/pack_ota.py build/m1-app.bin --manifest build/m1-app.json
+	./build/test_update build/ota/m1-mcu-ota.bin
 clean:
 	rm -rf build

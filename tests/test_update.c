@@ -99,7 +99,7 @@ static void fault_injection(void)
         assert(!memcmp(d.data+0x22000,image,256));cases++;
     }
 }
-static uint8_t last_reply[20];static unsigned resets;
+static uint8_t last_reply[20];static unsigned resets;static bool wifi_on;static unsigned wifi_low;
 static bool uart(void *ctx,m1_channel channel,const uint8_t *p,size_t n)
 { (void)ctx;if(channel==M1_LINK) { assert(n==20);memcpy(last_reply,p,20); }return true; }
 static bool i2c(void *c,unsigned b,uint8_t a,const uint8_t *t,size_t nt,uint8_t *rx,size_t nr)
@@ -107,12 +107,13 @@ static bool i2c(void *c,unsigned b,uint8_t a,const uint8_t *t,size_t nt,uint8_t 
 static bool rtc_read(void *c,m1_clock *v) { (void)c;(void)v;return false; }
 static bool rtc_write(void *c,const m1_clock *v) { (void)c;(void)v;return false; }
 static void buzzer(void *c,bool on) { (void)c;(void)on; }
+static void wifi(void *c,bool enabled) { (void)c;wifi_on=enabled;if(!enabled) wifi_low++; }
 static void reset(void *c) { (void)c;resets++; }
 static void wire(m1_runtime *r,const uint8_t *p,size_t n,uint32_t now)
 { for(size_t i=0;i<n;++i) m1_runtime_rx(r,M1_LINK,p[i],now); }
 static void wire_update(size_t length)
 {
-    fresh(length);m1_runtime r;m1_io callbacks={.uart=uart,.i2c=i2c,.rtc_read=rtc_read,.rtc_write=rtc_write,.buzzer=buzzer,.reset=reset,.flash=io};
+    fresh(length);m1_runtime r;m1_io callbacks={.uart=uart,.i2c=i2c,.rtc_read=rtc_read,.rtc_write=rtc_write,.buzzer=buzzer,.reset=reset,.wifi_enable=wifi,.flash=io};
     m1_runtime_init(&r,&callbacks,0);assert(last_reply[1]==0x17);
     uint8_t cmd[12]={0x23,0x12,(uint8_t)(length/256),(uint8_t)length,0,0,0,0,0,0,0,0x21};
     wire(&r,cmd,12,1);assert(r.update.active && last_reply[1]==0x14);
@@ -122,15 +123,44 @@ static void wire_update(size_t length)
     for(unsigned i=2;i<=length/256+1;++i) { n=block(p,i,length);wire(&r,p,n,104+i); }
     assert(r.update.complete && last_reply[1]==0x15 && last_reply[2]==1);
     cmd[1]=0x16;cmd[2]=0;wire(&r,cmd,12,500);assert(r.reset_pending);
-    unsigned before=resets;m1_runtime_poll(&r,599,false);assert(resets==before);
-    m1_runtime_poll(&r,600,false);assert(resets==before+1);
+    unsigned before=resets,low=wifi_low;assert(wifi_on);
+    m1_runtime_poll(&r,4499,false);assert(resets==before && wifi_on);
+    m1_runtime_poll(&r,4500,false);assert(resets==before && !wifi_on && wifi_low==low+1);
+    /* Pending reset cannot be cancelled or replaced by a second transaction. */
+    cmd[1]=0x12;wire(&r,cmd,12,4600);assert(!r.update.active);
+    m1_runtime_poll(&r,5499,false);assert(resets==before);
+    m1_runtime_poll(&r,5500,false);assert(resets==before+1 && wifi_low==low+1);
     assert(m1_boot_apply(&io)==M1_BOOT_UPDATED);assert(!memcmp(d.data+0x4000,image,length));cases++;
     /* An explicit cancellation must never submit metadata or reset. */
     m1_runtime_init(&r,&callbacks,1000);cmd[1]=0x12;cmd[2]=1;cmd[3]=0;wire(&r,cmd,12,1001);
     cmd[1]=0x16;cmd[2]=1;wire(&r,cmd,12,1002);
     assert(!r.update.active && !r.reset_pending && last_reply[1]==0x1a);
 }
-int main(void)
+static void reset_timing(void)
+{
+    fresh(500);m1_runtime r;m1_io callbacks={.uart=uart,.i2c=i2c,.rtc_read=rtc_read,.rtc_write=rtc_write,.buzzer=buzzer,.reset=reset,.wifi_enable=wifi,.flash=io};
+    uint32_t start=UINT32_MAX-2000u;
+    m1_runtime_init(&r,&callbacks,start);
+    uint8_t cmd[12]={0x23,0x16,0,0,0,0,0,0,0,0,0,0x21};
+    unsigned low=wifi_low,before=resets;
+    wire(&r,cmd,12,start);assert(!r.reset_pending && wifi_on && wifi_low==low);
+    receive(&r.update,500);wire(&r,cmd,12,start);assert(r.reset_pending);
+    m1_runtime_poll(&r,start+3999u,false);assert(wifi_on && resets==before);
+    /* A late main-loop poll must still hold CHIP_EN low for a whole second. */
+    m1_runtime_poll(&r,start+4500u,false);assert(!wifi_on && wifi_low==low+1);
+    m1_runtime_poll(&r,start+5499u,false);assert(resets==before);
+    m1_runtime_poll(&r,start+5500u,false);assert(resets==before+1);
+}
+static void built_image(const char *path)
+{
+    uint8_t payload[65536];FILE *file=fopen(path,"rb");assert(file);
+    size_t n=fread(payload,1,sizeof(payload),file);assert(!ferror(file) && feof(file));fclose(file);
+    assert(n>=164 && n<=65535);fresh(n);memcpy(image,payload,n);
+    m1_update u={0};receive(&u,n);assert(m1_update_commit(&u,&io));
+    assert(m1_boot_apply(&io)==M1_BOOT_UPDATED);assert(!memcmp(d.data+0x4000,payload,n));
+    printf("built OTA image: %zu bytes received/committed/installed byte-for-byte PASS\n",n);
+}
+int main(int argc,char **argv)
 {
     assert(~m1_crc32((const uint8_t *)"123456789",9,0xffffffff)==0xcbf43926);
     for(size_t n=164;n<=520;++n) transaction(n);
@@ -143,9 +173,10 @@ int main(void)
     m1_update_block(&u,&io,p,n,3,ack);assert(ack[4]==1 && ack[5]==2);
     p[8]^=1;m1_update_block(&u,&io,p,n,4,ack);assert(ack[4]==0);
     assert(!m1_update_commit(&u,&io));m1_update_abort(&u);assert(!u.active);
-    fault_injection();wire_update(500);wire_update(512);
+    fault_injection();wire_update(500);wire_update(512);reset_timing();
     d=committed;d.data[0x22020]^=1;assert(m1_boot_apply(&io)==M1_BOOT_INVALID);
     d=committed;d.data[0x3ff48]^=1;assert(m1_boot_apply(&io)==M1_BOOT_INVALID);
     d=committed;d.data[0x3ff00]=7;assert(m1_boot_apply(&io)==M1_BOOT_INVALID);
+    if(argc==2) built_image(argv[1]);
     puts("update: sequence/CRC/size/duplicate checks PASS");printf("update: %u transactions and interruption/retry cases PASS\n",cases);
 }

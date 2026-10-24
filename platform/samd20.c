@@ -245,10 +245,29 @@ static bool rtc_write(void *ctx,const m1_clock *c)
 }
 static bool tcsync(void)
 { for(unsigned i=0;i<SPINS;++i) if(!(TC1_REGS->COUNT16.TC_STATUS&TC_STATUS_SYNCBUSY_Msk) && !(TC1_REGS->COUNT16.TC_CTRLA&TC_CTRLA_SWRST_Msk)) return true; return false; }
+static void wifi_enable(void *ctx,bool enabled)
+{ (void)ctx; gpio_output(M1_WIFI_ENABLE,enabled); }
+static uint8_t buzzer_duty=50;
+static bool buzzer_pwm(void *ctx,uint16_t hz,uint8_t duty)
+{
+    (void)ctx;
+    if(hz<100 || hz>10000 || duty>100) return false;
+    gpio_output(M1_BUZZER,false);
+    TC1_REGS->COUNT16.TC_CTRLA&=~TC_CTRLA_ENABLE_Msk;
+    if(!tcsync()) return false;
+    uint16_t period=(uint16_t)(CPU_HZ/2/hz);
+    TC1_REGS->COUNT16.TC_COUNT=0; if(!tcsync()) return false;
+    TC1_REGS->COUNT16.TC_CC[0]=period-1; if(!tcsync()) return false;
+    TC1_REGS->COUNT16.TC_CC[1]=(uint16_t)((uint32_t)period*duty/100); if(!tcsync()) return false;
+    TC1_REGS->COUNT16.TC_CTRLA|=TC_CTRLA_ENABLE_Msk;
+    if(!tcsync()) return false;
+    buzzer_duty=duty; return true;
+}
 static void buzzer(void *ctx,bool enabled)
 {
     (void)ctx;
-    if(enabled) mux(M1_BUZZER,4); else gpio_output(M1_BUZZER,false);
+    if(enabled && buzzer_duty==100) gpio_output(M1_BUZZER,true);
+    else if(enabled) mux(M1_BUZZER,4); else gpio_output(M1_BUZZER,false);
 }
 void EIC_Handler(void) { EIC_REGS->EIC_INTFLAG=1u<<10; }
 static bool esync(void)
@@ -258,6 +277,24 @@ static void reset(void *ctx) { (void)ctx; NVIC_SystemReset(); }
 bool m1_platform_init(m1_io *io)
 {
     if(!m1_platform_clock()) return false;
+    wifi_enable(0,true);
+    /* Stock startup: 1000 x 1500 decrement/branch iterations after CHIP_EN
+     * release, before UART initialization. No invented millisecond constant. */
+    __asm__ volatile(".syntax unified\n"
+                     "movs r0, #250\n"
+                     "lsls r0, r0, #2\n"
+                     "b 3f\n"
+                     "1: subs r1, r1, #1\n"
+                     "cmp r1, #0\n"
+                     "bne 1b\n"
+                     "subs r0, r0, #1\n"
+                     "cmp r0, #0\n"
+                     "beq 4f\n"
+                     "3: ldr r1, =1500\n"
+                     "b 1b\n"
+                     "4:\n"
+                     ".syntax divided\n" ::: "r0","r1","cc","memory");
+    m1_platform_watchdog();
     PM_REGS->PM_APBCMASK|=PM_APBCMASK_SERCOM0_Msk|PM_APBCMASK_SERCOM1_Msk|PM_APBCMASK_SERCOM2_Msk|
         PM_APBCMASK_SERCOM3_Msk|PM_APBCMASK_SERCOM4_Msk|PM_APBCMASK_TC1_Msk;
     PM_REGS->PM_APBAMASK|=PM_APBAMASK_EIC_Msk;
@@ -284,7 +321,7 @@ bool m1_platform_init(m1_io *io)
     TC1_REGS->COUNT16.TC_CC[1]=1000; if(!tcsync()) return false;
     TC1_REGS->COUNT16.TC_CTRLA|=TC_CTRLA_ENABLE_Msk; if(!tcsync()) return false;
     gpio_output(M1_RTC_CE,false); gpio_output(M1_RTC_CLOCK,false); gpio_input(M1_RTC_DATA,false);
-    *io=(m1_io){.uart=uart_send,.i2c=i2c_transfer,.rtc_read=rtc_read,.rtc_write=rtc_write,.buzzer=buzzer,.reset=reset,.flash=m1_platform_flash()};
+    *io=(m1_io){.uart=uart_send,.i2c=i2c_transfer,.rtc_read=rtc_read,.rtc_write=rtc_write,.buzzer=buzzer,.reset=reset,.wifi_enable=wifi_enable,.buzzer_pwm=buzzer_pwm,.flash=m1_platform_flash()};
     return true;
 }
 static bool flash_read(void *ctx,uint32_t at,uint8_t *p,size_t n)

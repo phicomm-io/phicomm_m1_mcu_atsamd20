@@ -1,0 +1,61 @@
+{
+  "status": "PASS",
+  "stock_sha256": "6a8a9f72741e01d5ebc73467819079146553ec73339029eaf4cc49e8cbd1a7f9",
+  "pm_comparison_cases": 26,
+  "pa24_trace_cases": 4,
+  "pa24_traces": [
+    [
+      [
+        "0x41004418",
+        "0x1000000"
+      ]
+    ],
+    [],
+    [
+      [
+        "delay_ticks",
+        4000
+      ],
+      [
+        "0x41004414",
+        "0x1000000"
+      ],
+      [
+        "delay_ticks",
+        1000
+      ],
+      [
+        "0xe000ed0c",
+        "0x5fa0004"
+      ]
+    ],
+    [
+      [
+        "metadata_commit_stub"
+      ],
+      [
+        "delay_ticks",
+        4000
+      ],
+      [
+        "0x41004414",
+        "0x1000000"
+      ],
+      [
+        "delay_ticks",
+        1000
+      ],
+      [
+        "0xe000ed0c",
+        "0x5fa0004"
+      ]
+    ]
+  ],
+  "systick_reload": 7999,
+  "sht_status_path": [
+    "status-f32d",
+    "read-3",
+    "crc-check"
+  ],
+  "limits": "selected instructions; RTOS/GPIO configuration/NVM/I2C are stubs; no hardware proof; mode-3 comparison uses one candidate per 64-byte window"
+}

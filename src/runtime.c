@@ -43,13 +43,25 @@ void m1_runtime_init(m1_runtime *r,const m1_io *io,uint32_t now)
     r->second_at=now+1000; r->display_at=r->climate_at=r->hcho_at=r->pm_at=now;
     r->display_retry=now; r->brightness_applied=255; r->dirty=true;
     for(unsigned i=0;i<3;++i) r->health[i].last_good=now;
+    r->pm_mode=3; r->pm_auto=true; r->climate_reset_at=now;
+    if(io->wifi_enable) io->wifi_enable(io->context,true);
     event(r,0x17);
 }
 static void command(m1_runtime *r,const uint8_t *p,size_t n,uint32_t now)
 {
     uint8_t reply[20];
+    /* A committed upgrade owns the reset sequence; do not start new work. */
+    if(r->reset_pending) return;
+    if(p[1]==0x70) {
+        if(r->update.active) { m1_event(0x70,reply); reply[2]=p[2]; reply[3]=p[3]; reply[4]=2; }
+        else (void)m1_debug_command(r,p,reply,now);
+        (void)send(r,M1_LINK,reply,20); return;
+    }
     if(p[1]==0x12) {
-        if(m1_update_begin(&r->update,p[2],p[3],now)) event(r,0x14);
+        if(m1_update_begin(&r->update,p[2],p[3],now)) {
+            uint8_t leave[12]={0x23,0x70,5,0,0,0,0,0,0,0,0,0x21};
+            (void)m1_debug_command(r,leave,reply,now); event(r,0x14);
+        }
         else error(r,7);
         return;
     }
@@ -64,7 +76,7 @@ static void command(m1_runtime *r,const uint8_t *p,size_t n,uint32_t now)
     if(p[1]==0x16) {
         if(p[2]==1) { m1_update_abort(&r->update); event(r,0x1a); }
         else if(m1_update_commit(&r->update,&r->io.flash)) {
-            r->reset_pending=true; r->reset_at=now+100; r->state.display_on=false; r->dirty=true;
+            r->reset_pending=true; r->reset_phase=0; r->reset_at=now+4000; r->state.display_on=false; r->dirty=true;
         } else error(r,7);
         return;
     }
@@ -90,24 +102,38 @@ static void sample_hcho(m1_runtime *r,const uint8_t *p,uint32_t now)
     r->hcho_probe=3; r->state.hcho_raw=value;
     good(r,0,now); r->dirty=true;
 }
+void m1_runtime_pm_mode(m1_runtime *r,uint8_t mode,uint32_t now)
+{
+    if(mode!=0 && mode!=2 && mode!=3) return;
+    r->pm_auto=mode==0; r->pm_probing=false;
+    r->pm_mode=mode?mode:3; r->pm_warmup=0; r->pm_jump=false;
+    r->pm_previous=0; r->rx[M1_PM].used=0; r->pm_at=now;
+}
 static void sample_pm(m1_runtime *r,const uint8_t *p,uint32_t now)
 {
-    uint16_t value;
-    if(!m1_pm25_raw(p,&value)) { bad(r,1); return; }
-    good(r,1,now);
-    if(r->pm_warmup<2) { r->pm_warmup++; value=0; }
-    else if(r->pm_previous<=149 && value>=1001 && !r->pm_jump) {
+    /* Both stock branches carry the same 32-byte data frame. A valid sensor
+     * error frame publishes zero in stock, but must not claim healthy data. */
+    unsigned sum=0; for(unsigned i=0;i<30;++i) sum+=p[i];
+    if(p[0]!=0x42 || p[1]!=0x4d || p[2]!=0 || p[3]!=28 ||
+       sum!=((unsigned)p[30]<<8|p[31])) { bad(r,1); return; }
+    uint16_t value=(uint16_t)((uint16_t)p[12]<<8|p[13]);
+    if(p[29]) { bad(r,1); value=0; } else good(r,1,now);
+    unsigned warmup=r->pm_mode==2?4:2;
+    if(r->pm_warmup<warmup) { r->pm_warmup++; value=0; }
+    else if(r->pm_mode==3 && r->pm_previous<=149 && value>=1001 && !r->pm_jump) {
         r->pm_jump=true; return;
     } else r->pm_jump=false;
     r->pm_previous=value; r->state.sample.pm25=value; r->dirty=true;
 }
 void m1_runtime_rx_error(m1_runtime *r,m1_channel channel)
 {
+    if((unsigned)channel>M1_PM) return;
     r->rx[channel].used=0; r->rx_errors++;
     if(channel!=M1_LINK) bad(r,channel==M1_HCHO?0:1);
 }
 void m1_runtime_rx(m1_runtime *r,m1_channel channel,uint8_t byte,uint32_t now)
 {
+    if((unsigned)channel>M1_PM || r->reset_phase) return;
     m1_rx *s=&r->rx[channel];
     if(s->used && now-s->last>100) { s->used=0; r->rx_errors++; }
     s->last=now;
@@ -117,6 +143,19 @@ void m1_runtime_rx(m1_runtime *r,m1_channel channel,uint8_t byte,uint32_t now)
     size_t expected=channel==M1_LINK?12:channel==M1_HCHO?9:32;
     if(channel==M1_PM && s->used==2 && byte!=0x4d) {
         s->used=byte==head?1:0; return;
+    }
+    if(channel==M1_PM && r->pm_probing && s->used>=4 &&
+       (s->bytes[2]!=0 || s->bytes[3]!=28)) {
+        if(s->used<8) return;
+        if(s->bytes[0]==0x42 && s->bytes[1]==0x4d && s->bytes[6]==1 && s->bytes[7]==0x74) {
+            if(r->pm_mode!=2) { r->pm_mode=2; r->pm_warmup=0; r->pm_jump=false; r->pm_previous=0; }
+            r->pm_probing=false; s->used=0; return;
+        }
+        /* Invalid short response: retain a possible embedded next header. */
+        unsigned skip=1; while(skip<s->used && s->bytes[skip]!=0x42) skip++;
+        s->used=(uint16_t)(s->used-skip);
+        for(unsigned i=0;i<s->used;++i) s->bytes[i]=s->bytes[i+skip];
+        r->rx_errors++; return;
     }
     if(channel==M1_LINK && s->used>=4 && s->bytes[1]==0x13) {
         uint16_t block=(uint16_t)((uint16_t)s->bytes[2]<<8|s->bytes[3]);
@@ -128,7 +167,17 @@ void m1_runtime_rx(m1_runtime *r,m1_channel channel,uint8_t byte,uint32_t now)
     if(valid) {
         if(channel==M1_LINK) command(r,s->bytes,expected,now);
         else if(channel==M1_HCHO) sample_hcho(r,s->bytes,now);
-        else sample_pm(r,s->bytes,now);
+        else {
+            unsigned sum=0; for(unsigned i=0;i<30;++i) sum+=s->bytes[i];
+            if(s->bytes[2]!=0 || s->bytes[3]!=28 || sum!=((unsigned)s->bytes[30]<<8|s->bytes[31])) {
+                bad(r,1); unsigned skip=1;
+                while(skip<s->used && s->bytes[skip]!=0x42) skip++;
+                s->used=(uint16_t)(s->used-skip);
+                for(unsigned i=0;i<s->used;++i) s->bytes[i]=s->bytes[i+skip];
+                return;
+            }
+            sample_pm(r,s->bytes,now);
+        }
         s->used=0;
     } else {
         unsigned skip=1;
@@ -138,36 +187,61 @@ void m1_runtime_rx(m1_runtime *r,m1_channel channel,uint8_t byte,uint32_t now)
         r->rx_errors++;
     }
 }
+static bool climate_cmd(m1_runtime *r,uint16_t command)
+{
+    uint8_t tx[2]={(uint8_t)(command>>8),(uint8_t)command};
+    return r->io.i2c(r->io.context,2,0x44,tx,2,0,0);
+}
+static void climate_failed(m1_runtime *r,uint32_t now)
+{
+    bad(r,2); r->climate_phase=0; r->climate_status_valid=false;
+    if(r->health[2].bad>=3) r->climate_reset_due=true;
+    r->climate_at=now+1000;
+}
 static void climate(m1_runtime *r,uint32_t now)
 {
     if(!due(now,r->climate_at)) return;
     uint8_t data[6];
     if(!r->climate_phase) {
-        const uint8_t cmd[]={0x24,0};
-        if(r->io.i2c(r->io.context,2,0x44,cmd,2,0,0)) {
-            r->climate_phase=1; r->climate_at=now+20; return;
+        if(r->climate_reset_due && due(now,r->climate_reset_at)) {
+            r->climate_reset_at=now+10000; /* Bound reset storms, even on NACK. */
+            if(!climate_cmd(r,0x30a2)) { climate_failed(r,now); return; }
+            r->climate_resets++; r->climate_reset_due=false;
+            r->climate_status_valid=false; r->climate_phase=5; r->climate_at=now+2; return;
+        }
+        if(climate_cmd(r,0xf32d)) { r->climate_phase=3; r->climate_at=now+1; return; }
+    } else if(r->climate_phase==5) {
+        /* Soft reset needs up to 1.5 ms (SHT3x-DIS v7). */
+        r->climate_phase=0; r->climate_at=now; return;
+    } else if(r->climate_phase==3) {
+        if(r->io.i2c(r->io.context,2,0x44,0,0,data,3) && m1_sht_crc(data,2)==data[2]) {
+            r->climate_status=(uint16_t)((uint16_t)data[0]<<8|data[1]);
+            r->climate_status_valid=true;
+            /* Alert/reset-detected flags are informational. A bad last
+             * command/write contributes to failure, never a reset loop alone. */
+            if(!(r->climate_status&3) && climate_cmd(r,0x2400)) {
+                r->climate_phase=1; r->climate_at=now+20; return;
+            }
         }
     } else if(r->climate_phase==1) {
         if(r->io.i2c(r->io.context,2,0x44,0,0,data,6) && m1_sht_raw(data,&r->raw_t,&r->raw_h)) {
-            /* Original additional sensor command is 0x3682, not 0xf32d. */
-            const uint8_t cmd[]={0x36,0x82};
-            if(r->io.i2c(r->io.context,2,0x44,cmd,2,0,0)) {
-                r->climate_phase=2; r->climate_at=now+2; return;
-            }
+            if(climate_cmd(r,0x3682)) { r->climate_phase=2; r->climate_at=now+2; return; }
         }
-    } else if(r->io.i2c(r->io.context,2,0x44,0,0,data,6)) {
+    } else if(r->climate_phase==2 && r->io.i2c(r->io.context,2,0x44,0,0,data,6)) {
         int32_t t; uint32_t rh;
         uint32_t aux=(uint32_t)data[0]<<24|(uint32_t)data[1]<<16|(uint32_t)data[3]<<8|data[4];
         m1_climate next=r->climate;
         if(m1_climate_convert(&next,r->raw_t,r->raw_h,aux,
-                             r->state.display_on && r->state.brightness,&t,&rh)) {
+                             (r->debug_display ? (r->debug_state.display_on && r->debug_state.brightness) :
+                              (r->state.display_on && r->state.brightness)),&t,&rh)) {
             r->climate=next;
             r->state.sample.temperature_centi_c=(int16_t)(t/10);
             r->state.sample.humidity_centi_pct=(uint16_t)(rh>100000?10000:rh/10);
-            good(r,2,now); r->dirty=true; r->climate_phase=0; r->climate_at=now+978; return;
+            good(r,2,now); r->climate_reset_due=false; r->dirty=true;
+            r->climate_phase=0; r->climate_at=now+977; return;
         }
     }
-    bad(r,2); r->climate_phase=0; r->climate_at=now+1000;
+    climate_failed(r,now);
 }
 static void display(m1_runtime *r,uint32_t now)
 {
@@ -178,15 +252,16 @@ static void display(m1_runtime *r,uint32_t now)
             if(!r->io.i2c(r->io.context,0,0x72,init+i,1,0,0)) goto failed;
         r->display_ready=true; r->brightness_applied=255;
     }
-    bool on=r->state.display_on && r->state.brightness;
+    const m1_state *shown=r->debug_display?&r->debug_state:&r->state;
+    bool on=shown->display_on && shown->brightness;
     uint8_t control=on?0x83:0x82;
-    if(r->brightness_applied!=r->state.brightness || r->display_applied!=on) {
+    if(r->brightness_applied!=shown->brightness || r->display_applied!=on) {
         if(!r->io.i2c(r->io.context,0,0x72,&control,1,0,0)) goto failed;
         if(on) {
-            control=m1_display_brightness(r->state.brightness);
+            control=m1_display_brightness(shown->brightness);
             if(!r->io.i2c(r->io.context,0,0x72,&control,1,0,0)) goto failed;
         }
-        r->display_applied=on; r->brightness_applied=r->state.brightness;
+        r->display_applied=on; r->brightness_applied=shown->brightness;
     }
     uint8_t packet[30]={0};
     /* Stock low-value normalization is applied on display refresh, not RX. */
@@ -194,7 +269,9 @@ static void display(m1_runtime *r,uint32_t now)
     } else if(r->state.hcho_raw<11) {
         r->state.sample.hcho=r->low_hcho_seen?10:0; r->low_hcho_seen=true;
     } else { r->state.sample.hcho=r->state.hcho_raw; r->low_hcho_seen=true; }
-    m1_display_render(&r->state,packet+1);
+    if(r->debug_display && r->debug_raw) {
+        for(unsigned i=0;i<M1_DISPLAY_BYTES;++i) packet[i+1]=r->debug_ram[i];
+    } else m1_display_render(shown,packet+1);
     if(!r->io.i2c(r->io.context,0,0x72,packet,30,0,0)) goto failed;
     r->dirty=false; r->display_at=now+1000; return;
 failed:
@@ -232,6 +309,7 @@ void m1_runtime_beep(m1_runtime *r,m1_buzzer_mode mode,uint32_t now)
 }
 static void buzzer(m1_runtime *r,uint32_t now)
 {
+    if(r->debug_buzzer) return;
     bool alarm=(r->state.sample.hcho_health && r->state.hcho_raw>300)||
         (r->state.sample.pm25_health && r->state.sample.pm25>150);
     if(alarm && !r->alarm_latched && r->buzzer_mode!=1) { r->buzzer_mode=3; r->buzzer_at=now; }
@@ -247,6 +325,14 @@ static void buzzer(m1_runtime *r,uint32_t now)
 }
 void m1_runtime_poll(m1_runtime *r,uint32_t now,bool pressed)
 {
+    if(r->reset_pending && due(now,r->reset_at)) {
+        if(!r->reset_phase) {
+            if(r->io.wifi_enable) r->io.wifi_enable(r->io.context,false);
+            r->reset_phase=1; r->reset_at=now+1000;
+        } else { r->reset_pending=false; r->io.reset(r->io.context); }
+    }
+    if(r->reset_phase) return;
+    m1_debug_poll(r,now);
     if(due(now,r->second_at)) {
         /* Bound catch-up after long stalls; deadlines use modulo-32 arithmetic. */
         unsigned n=(now-r->second_at)/1000+1;
@@ -267,8 +353,12 @@ void m1_runtime_poll(m1_runtime *r,uint32_t now,bool pressed)
         if(probe) r->hcho_probe++;
         r->hcho_at=now+(probe?500:1000);
     }
+    if(r->pm_probing && due(now,r->pm_probe_until)) r->pm_probing=false;
     if(due(now,r->pm_at)) {
-        (void)send(r,M1_PM,pm_probe,7); r->pm_at=now+10000;
+        if(send(r,M1_PM,pm_probe,7) && r->pm_auto) {
+            r->pm_probing=true; r->pm_probe_until=now+1000;
+        }
+        r->pm_at=now+10000;
         if(r->health[1].fault) r->pm_warmup=0;
         if(r->health[0].fault) r->hcho_probe=0;
     }
@@ -278,7 +368,7 @@ void m1_runtime_poll(m1_runtime *r,uint32_t now,bool pressed)
             h->fault=true; h->timeouts++;
             if(i==0) { r->state.sample.hcho_health=0; r->hcho_probe=0; error(r,8); }
             if(i==1) { r->state.sample.pm25_health=0; r->pm_warmup=0; error(r,9); }
-            if(i==2) r->state.sample.climate_health=0;
+            if(i==2) { r->state.sample.climate_health=0; r->climate_reset_due=true; }
         }
         /* Invalid frames must clear health as well as stale samples. */
         if(h->fault) {
@@ -289,5 +379,4 @@ void m1_runtime_poll(m1_runtime *r,uint32_t now,bool pressed)
     }
     climate(r,now); button(r,now,pressed); display(r,now); buzzer(r,now);
     if(r->update.active && now-r->update.last_activity>30000) m1_update_abort(&r->update);
-    if(r->reset_pending && due(now,r->reset_at)) { r->reset_pending=false; r->io.reset(r->io.context); }
 }

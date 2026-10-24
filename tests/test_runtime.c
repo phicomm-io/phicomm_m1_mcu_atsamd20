@@ -7,7 +7,8 @@
 typedef struct {
     unsigned commands[3][256],rtc_writes,resets,display_writes,buzz_changes;
     uint8_t last[3][32],screen[29];size_t last_size[3];
-    bool bus_fail,tx_fail,rtc_ok,buzz;
+    bool bus_fail,tx_fail,rtc_ok,buzz,status_crc_bad,pwm_fail,wifi,reset_nack;
+    uint16_t status,pwm_hz; uint8_t pwm_duty; unsigned status_reads,soft_resets,reset_attempts;
     m1_clock clock;
 } fake;
 static fake f;static m1_runtime r;
@@ -21,18 +22,29 @@ static bool i2c(void *ctx,unsigned bus,uint8_t addr,const uint8_t *tx,size_t nt,
     fake *v=ctx;if(v->bus_fail) return false;
     if(bus==0) { assert(addr==0x72 && !nr);if(nt==30) { memcpy(v->screen,tx+1,29);v->display_writes++; } }
     else { assert(bus==2 && addr==0x44);if(nr) {
+        if(nr==3) {
+            v->status_reads++;rx[0]=(uint8_t)(v->status>>8);rx[1]=(uint8_t)v->status;
+            rx[2]=m1_sht_crc(rx,2);if(v->status_crc_bad) rx[2]^=1;return true;
+        }
         assert(nr==6);rx[0]=0x66;rx[1]=0x66;rx[2]=m1_sht_crc(rx,2);
         rx[3]=0x80;rx[4]=0;rx[5]=m1_sht_crc(rx+3,2);
-    } else assert(nt==2 && ((tx[0]==0x24 && tx[1]==0)||(tx[0]==0x36 && tx[1]==0x82))); }
+    } else {
+        assert(nt==2 && ((tx[0]==0x24 && tx[1]==0)||(tx[0]==0x36 && tx[1]==0x82)||
+               (tx[0]==0xf3 && tx[1]==0x2d)||(tx[0]==0x30 && tx[1]==0xa2)));
+        if(tx[0]==0x30) { v->reset_attempts++;if(v->reset_nack) return false;v->soft_resets++;v->status=0x10; }
+    } }
     return true;
 }
 static bool rtc_get(void *ctx,m1_clock *c) { fake *v=ctx;if(!v->rtc_ok) return false;*c=v->clock;return true; }
 static bool rtc_set(void *ctx,const m1_clock *c) { fake *v=ctx;v->clock=*c;v->rtc_writes++;return true; }
 static void buzz(void *ctx,bool on) { fake *v=ctx;v->buzz=on;v->buzz_changes++; }
+static bool pwm(void *ctx,uint16_t hz,uint8_t duty)
+{ fake *v=ctx;if(v->pwm_fail) return false;v->pwm_hz=hz;v->pwm_duty=duty;return true; }
+static void wifi(void *ctx,bool enabled) { ((fake *)ctx)->wifi=enabled; }
 static void reset(void *ctx) { ((fake *)ctx)->resets++; }
 static void init(uint32_t now)
 {
-    f=(fake){0};m1_io io={.context=&f,.uart=uart,.i2c=i2c,.rtc_read=rtc_get,.rtc_write=rtc_set,.buzzer=buzz,.reset=reset};
+    f=(fake){0};m1_io io={.context=&f,.uart=uart,.i2c=i2c,.rtc_read=rtc_get,.rtc_write=rtc_set,.buzzer=buzz,.reset=reset,.buzzer_pwm=pwm,.wifi_enable=wifi};
     m1_runtime_init(&r,&io,now);assert(f.commands[M1_LINK][0x17]==1);
 }
 static void bytes(m1_channel c,const uint8_t *p,size_t n,uint32_t now)
@@ -76,7 +88,7 @@ static void button_tests(void)
 static void sensors(void)
 {
     init(0);tick(0,false);assert(f.commands[M1_HCHO][1]==1 && f.commands[M1_PM][0x4d]==1);
-    tick(20,false);tick(22,false);assert(r.state.sample.climate_health==1);
+    tick(1,false);tick(21,false);tick(23,false);assert(r.state.sample.climate_health==1);
     hcho(155,30,false);assert(r.state.sample.hcho_health==1 && r.state.hcho_raw==155);
     cmd(0x19,0,0,31);assert(f.last[M1_LINK][1]==0x19 && f.last[M1_LINK][2]==0 && f.last[M1_LINK][3]==155);
     tick(32,false);assert(r.state.sample.hcho==155);
@@ -93,7 +105,7 @@ static void sensors(void)
     m1_runtime_rx_error(&r,M1_HCHO);assert(r.rx_errors>0);
     init(0);f.bus_fail=true;tick(0,false);assert(r.display_errors==1 && !r.display_ready);
     tick(100,false);assert(r.display_errors==1);f.bus_fail=false;tick(1000,false);assert(r.display_ready);
-    init(UINT32_MAX-10);tick(UINT32_MAX-10,false);tick(9,false);tick(11,false);assert(r.state.sample.climate_health==1);
+    init(UINT32_MAX-10);tick(UINT32_MAX-10,false);tick(UINT32_MAX-9,false);tick(10,false);tick(12,false);assert(r.state.sample.climate_health==1);
 }
 static void protocol(void)
 {
@@ -133,6 +145,101 @@ static void display(void)
     s.display_test=true;m1_display_render(&s,ram);for(unsigned i=0;i<29;++i) assert(ram[i]==255);
     assert(m1_display_brightness(25)==0xb1 && m1_display_brightness(50)==0xb7 && m1_display_brightness(75)==0xbb);
 }
+static void pm_modes(void)
+{
+    init(0);tick(0,false);assert(r.pm_probing);
+    const uint8_t ack[8]={0x42,0x4d,0,4,0xe1,0,1,0x74};
+    bytes(M1_PM,ack,3,1);bytes(M1_PM,ack+3,5,2);
+    assert(r.pm_mode==2 && !r.pm_probing);
+    for(unsigned i=0;i<4;++i) { pm(30,3+i);assert(!r.state.sample.pm25); }
+    pm(30,7);assert(r.state.sample.pm25==30);
+    pm(1200,8);assert(r.state.sample.pm25==1200); /* no mode-3 spike hold */
+    m1_runtime_pm_mode(&r,3,9);assert(!r.pm_auto && r.pm_warmup==0);
+    pm(10,10);pm(10,11);pm(10,12);pm(1200,13);assert(r.state.sample.pm25==10);
+    /* A false header followed by a real frame must retain the overlapping
+     * candidate, even when received in several UART chunks. */
+    uint8_t noise[11]={0x42,0x4d,0,28};bytes(M1_PM,noise,11,14);pm(1201,15);
+    assert(r.state.sample.pm25==1201);
+    m1_runtime_pm_mode(&r,0,16);tick(16,false);tick(1016,false);
+    assert(!r.pm_probing && r.pm_mode==3);
+    tick(10016,false);assert(r.pm_probing);
+    bytes(M1_PM,ack,8,10017);assert(r.pm_mode==2 && r.pm_warmup==0);
+    m1_runtime_pm_mode(&r,3,10018);tick(10018,false);
+    bytes(M1_PM,ack,8,10019);assert(r.pm_mode==3);
+}
+static void climate_recovery(void)
+{
+    init(0);f.status=0x8010;tick(0,false);tick(1,false);tick(21,false);tick(23,false);
+    assert(r.climate_status==0x8010 && r.climate_status_valid && r.state.sample.climate_health);
+    assert(!f.soft_resets); /* reset-detected and alert alone are informational */
+    f.status_crc_bad=true;
+    tick(1000,false);tick(1001,false);tick(2001,false);tick(2002,false);tick(3002,false);tick(3003,false);
+    assert(r.health[2].fault && r.climate_reset_due && !r.climate_status_valid);
+    tick(4003,false);assert(f.soft_resets==1 && r.climate_phase==5);
+    unsigned reads=f.status_reads;tick(4004,false);assert(f.status_reads==reads);
+    f.status_crc_bad=false;tick(4005,false);tick(4006,false);tick(4007,false);tick(4027,false);tick(4029,false);
+    assert(r.state.sample.climate_health==1 && !r.health[2].fault && r.climate_resets==1);
+    f.status=3;
+    for(uint32_t t=5006;t<=14002;++t) tick(t,false);
+    assert(f.soft_resets==1 && !r.state.sample.climate_health);
+    for(uint32_t t=14003;t<=15050;++t) tick(t,false);
+    assert(f.soft_resets==2);
+    init(0);f.status_crc_bad=true;f.reset_nack=true;
+    for(uint32_t t=0;t<=13000;++t) tick(t,false);
+    assert(f.reset_attempts==1 && !f.soft_resets && !r.state.sample.climate_health);
+    for(uint32_t t=13001;t<=14010;++t) tick(t,false);
+    assert(f.reset_attempts==2 && !f.soft_resets);
+    init(UINT32_MAX-100);f.bus_fail=true;
+    tick(UINT32_MAX-100,false);tick(899,false);tick(1899,false);f.bus_fail=false;tick(2899,false);
+    assert(f.soft_resets==1);
+}
+static void debug(uint8_t op,const uint8_t args[7],uint32_t at)
+{
+    uint8_t p[12]={0x23,0x70,op,0x5a,0,0,0,0,0,0,0,0x21};
+    if(args) memcpy(p+4,args,7);
+    bytes(M1_LINK,p,12,at);
+    assert(f.last[M1_LINK][1]==0x70 && f.last[M1_LINK][2]==op && f.last[M1_LINK][3]==0x5a);
+}
+static void debug_tests(void)
+{
+    init(0);debug(0,0,0);assert(f.last[M1_LINK][4]==0 && f.last[M1_LINK][5]==1);
+    uint8_t tone[7]={0x0b,0xb8,25,0x01,0xf4,0,0};
+    debug(1,tone,1);assert(r.debug_buzzer && f.buzz && f.pwm_hz==3000 && f.pwm_duty==25);
+    tick(500,false);assert(f.buzz);tick(501,false);assert(!f.buzz && f.pwm_hz==2000 && f.pwm_duty==50);
+    tone[2]=101;debug(1,tone,502);assert(f.last[M1_LINK][4]==1 && !r.debug_buzzer);
+    tone[2]=50;f.pwm_fail=true;debug(1,tone,503);assert(f.last[M1_LINK][4]==4 && !r.debug_buzzer);f.pwm_fail=false;
+    hcho(42,510,false);pm(20,510);pm(20,511);pm(20,512);
+    uint8_t sample[7]={0x01,0x2d,0,151,0xfd,0xda,55};
+    debug(2,sample,513);tick(513,false);
+    assert(r.debug_display && r.debug_state.sample.temperature_centi_c==-550 && f.screen[16]==2);
+    cmd(1,0,0,514);assert(f.last[M1_LINK][9]==0 && f.last[M1_LINK][10]==20);
+    assert(r.state.hcho_raw==42 && r.state.sample.pm25==20);
+    uint8_t raw[7]={0x13,1,0x70,0,0,0,0};debug(4,raw,515);tick(515,false);assert(f.screen[0x13]==0x70);
+    uint8_t get[7]={0x13,1,0,0,0,0,0};debug(8,get,516);assert(f.last[M1_LINK][7]==0x70);
+    raw[0]=28;raw[1]=2;debug(4,raw,517);assert(f.last[M1_LINK][4]==1 && r.debug_ram[0x13]==0x70);
+    uint8_t control[7]={25,1,1,0,50,0,0};debug(3,control,518);tick(518,false);
+    for(unsigned i=0;i<29;++i) assert(f.screen[i]==255);
+    tick(568,false);assert(!r.debug_display && f.screen[16]!=255 && r.state.brightness==100);
+    debug(6,0,569);assert(f.last[M1_LINK][4]==0 && f.last[M1_LINK][5]==3);
+    uint8_t mode[7]={2,0,0,0,0,0,0};debug(7,mode,570);assert(r.pm_mode==2);
+    debug(255,0,571);assert(f.last[M1_LINK][4]==3);
+    debug(2,sample,572);debug(1,tone,573);cmd(0x12,1,0,574);
+    assert(r.update.active && !r.debug_display && !r.debug_buzzer && !f.buzz);
+    debug(2,sample,575);assert(f.last[M1_LINK][4]==2 && !r.debug_display);
+    init(UINT32_MAX-10);tone[3]=0;tone[4]=20;
+    debug(1,tone,UINT32_MAX-10);tick(8,false);assert(f.buzz);tick(9,false);assert(!f.buzz);
+}
+static void debug_stream_fuzz(void)
+{
+    init(0);uint32_t seed=20261024;
+    for(unsigned i=0;i<12000;++i) {
+        uint8_t p[12]={0x23,0x70,0,0,0,0,0,0,0,0,0,0x21};
+        for(unsigned j=2;j<11;++j) { seed=seed*1664525u+1013904223u;p[j]=(uint8_t)(seed>>24); }
+        p[2]=(uint8_t)(i%9);bytes(M1_LINK,p,12,i);tick(i,false);
+        assert(r.rx[M1_LINK].used<12 && r.rx[M1_PM].used<32);
+    }
+    m1_runtime_rx_error(&r,(m1_channel)-1);m1_runtime_rx(&r,(m1_channel)-1,0,0);
+}
 static void arithmetic_fuzz(void)
 {
     uint32_t seed=20261024;
@@ -148,7 +255,7 @@ static void arithmetic_fuzz(void)
 }
 int main(void)
 {
-    clock_tests();button_tests();sensors();protocol();display();arithmetic_fuzz();
-    puts("runtime: sensors/recovery/protocol/button/clock/display/buzzer/wraparound PASS");
+    clock_tests();button_tests();sensors();protocol();display();pm_modes();climate_recovery();debug_tests();debug_stream_fuzz();arithmetic_fuzz();
+    puts("runtime: PM dual modes/SHT recovery/PA24/debug/protocol/button/clock/display/buzzer/wraparound PASS");
     puts("climate: 50000 bounded random conversions PASS");
 }

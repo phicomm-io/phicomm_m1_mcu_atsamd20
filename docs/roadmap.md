@@ -1,6 +1,6 @@
 # 实现状态与剩余验收
 
-`oss-0.2` 已实现系统、驱动、通信、采集/补偿、显示、RTC、按键、蜂鸣器、健康与 OTA/Boot。代码入口及策略见 [implementation.md](implementation.md)。
+`oss-0.3` 已实现系统、驱动、通信、采集/补偿、显示、RTC、按键、蜂鸣器、健康与 OTA/Boot。代码入口及策略见 [implementation.md](implementation.md)。
 
 | 层次 | 状态 | 剩余工作 |
 | --- | --- | --- |
@@ -12,7 +12,7 @@
 | 暂存升级及 Boot 恢复 | 软件模型 PASS；实物 NOT_RUN | 真实 NVM 页写、受控中断供电、原厂/新 Boot 各自验收 |
 | 发布刷机版 | 未进行 | 独立样机恢复链、完整硬件验收后单独发布 |
 
-原厂另一路 PM 格式/四帧预热、状态查询/软复位、原厂 RTOS tick 精确时间及 PA24 作用仍需恢复证据。当前明确采用的策略和原厂未确认部分在实现说明中列出。
+PM 双模式/四帧预热、`f32d` 状态查询、软复位限流恢复和 PA24 启动/升级时序已接入。原厂 SysTick reload=7999、OSC8M / 1 支持 1 ms tick 的静态结论；实际波形及全部 RTOS/异常分支仍需验收。用户已确认 PA24 连接联网模块 CHIP_EN，传感器是否共用仍需测量。新增调试协议和 CI OTA 候选包见 [debug-protocol.md](debug-protocol.md)、[ota.md](ota.md)。
 
 参数阈值维持 RAM 保存和固定灯色规则。自定义告警阈值生效、参数 Flash 持久化、A/B 回滚、签名验证、Boot 串口救援属于后续新增能力，不作为当前已实现行为。
 
