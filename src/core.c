@@ -50,7 +50,7 @@ void m1_sample_reply(const m1_sample *s, uint8_t reply[M1_REPLY_BYTES])
     reply[11] = s->pm25_health; reply[12] = s->hcho_health; reply[13] = s->climate_health;
 }
 
-static bool valid_clock(const m1_clock *c)
+bool m1_clock_valid(const m1_clock *c)
 {
     static const uint8_t days[] = {31,28,31,30,31,30,31,31,30,31,30,31};
     if (c->year < 2000 || c->year > 2099 || !c->month || c->month > 12 ||
@@ -65,13 +65,16 @@ m1_result m1_command(m1_state *s, const uint8_t f[M1_COMMAND_BYTES], uint8_t rep
     if (f[0] != 0x23 || f[11] != 0x21) return M1_BAD_FRAME;
     switch (f[1]) {
     case 1: m1_sample_reply(&s->sample, reply); return M1_REPLY;
-    case 2:
+    case 2: case 0x10:
         /* Deliberately validate instead of repeating the stock permissive path. */
-        if (f[2] > 100 || f[2] % 25 || f[3] > 1) return M1_BAD_FRAME;
-        s->brightness = f[2]; s->display_on = f[3] != 0; return M1_APPLIED;
+        if (f[2] > 100 || f[2] % 25 || f[3] > 2) return M1_BAD_FRAME;
+        s->brightness = f[2];
+        s->display_on = f[3] == 2 ? !s->display_on : f[3] != 0;
+        s->display_test = f[1] == 0x10;
+        return M1_APPLIED;
     case 3: {
         m1_clock c = {be16(f + 2), f[4], f[5], f[6], f[7], f[8]};
-        if (!valid_clock(&c)) return M1_BAD_FRAME;
+        if (!m1_clock_valid(&c)) return M1_BAD_FRAME;
         s->clock = c; return M1_APPLIED;
     }
     case 5: case 6: {
@@ -95,7 +98,9 @@ m1_result m1_command(m1_state *s, const uint8_t f[M1_COMMAND_BYTES], uint8_t rep
         for (size_t i = 0; i < sizeof(version) - 1; ++i) reply[3 + i] = (uint8_t)version[i];
         return M1_REPLY;
     }
-    /* OTA commands intentionally have no implementation or Flash side effects. */
+    case 0x19:
+        envelope(reply, 0x19); put16(reply + 2, s->hcho_raw); return M1_REPLY;
+    /* Variable-length OTA transactions are handled by runtime.c/update.c. */
     default: return M1_UNSUPPORTED;
     }
 }
@@ -103,6 +108,16 @@ m1_result m1_command(m1_state *s, const uint8_t f[M1_COMMAND_BYTES], uint8_t rep
 void m1_button_short(m1_state *s, uint8_t reply[M1_REPLY_BYTES])
 { s->display_on = !s->display_on; envelope(reply, 0x0f); reply[2] = s->display_on; }
 void m1_network_reset_event(uint8_t reply[M1_REPLY_BYTES]) { envelope(reply, 0x18); }
+void m1_event(uint8_t command, uint8_t reply[M1_REPLY_BYTES]) { envelope(reply, command); }
+void m1_error_event(uint8_t command, uint8_t reply[M1_REPLY_BYTES])
+{
+    envelope(reply, command);
+    static const char text[] = "error";
+    for (unsigned i = 0; i < 5; ++i) reply[i + 2] = (uint8_t)text[i];
+    reply[7] = command == 7 ? 'u' : command == 8 || command == 10 ? 'j' : 'p';
+    reply[8] = command == 7 ? 'p' : command == 8 || command == 10 ? 'q' : 'm';
+    reply[9] = reply[10] = command >= 10 ? 0xee : 0xff;
+}
 
 unsigned m1_hcho_group(uint16_t value) { return value <= 100 ? 2u : value <= 300 ? 3u : 1u; }
 unsigned m1_pm25_group(uint16_t value) { return value <= 75 ? 2u : value <= 150 ? 3u : 1u; }

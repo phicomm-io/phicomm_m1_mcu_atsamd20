@@ -1,4 +1,4 @@
-name: Core and memory layout
+name: Firmware and recovery checks
 on: [push, pull_request]
 permissions:
   contents: read
@@ -12,4 +12,4 @@ jobs:
       - name: ARM toolchain
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends gcc-arm-none-eabi binutils-arm-none-eabi
       - name: Cortex-M0+ compile, link and vector checks
-        run: make link-check
+        run: make firmware bootloader

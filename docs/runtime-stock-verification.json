@@ -1,0 +1,7 @@
+{
+  "status": "PASS",
+  "stock_sha256": "6a8a9f72741e01d5ebc73467819079146553ec73339029eaf4cc49e8cbd1a7f9",
+  "climate_state_and_output_cases": 944,
+  "complete_display_cases": 200,
+  "limits": "emulated stock arithmetic and rendering; no peripheral or hardware proof"
+}

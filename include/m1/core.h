@@ -8,7 +8,7 @@
 #define M1_COMMAND_BYTES 12u
 #define M1_REPLY_BYTES 20u
 #define M1_DISPLAY_BYTES 29u
-#define M1_VERSION "oss-0.1"
+#define M1_VERSION "oss-0.2"
 
 typedef struct {
     uint16_t hcho, pm25;
@@ -26,8 +26,9 @@ typedef struct {
     m1_sample sample;
     m1_clock clock;
     uint16_t hcho_threshold[2], pm25_threshold[2];
+    uint16_t hcho_raw;
     uint8_t brightness;
-    bool display_on, buzzer_on;
+    bool display_on, buzzer_on, display_test;
 } m1_state;
 
 typedef struct {
@@ -45,9 +46,16 @@ m1_result m1_command(m1_state *state, const uint8_t frame[M1_COMMAND_BYTES],
 void m1_sample_reply(const m1_sample *sample, uint8_t reply[M1_REPLY_BYTES]);
 void m1_button_short(m1_state *state, uint8_t reply[M1_REPLY_BYTES]);
 void m1_network_reset_event(uint8_t reply[M1_REPLY_BYTES]);
+void m1_event(uint8_t command, uint8_t reply[M1_REPLY_BYTES]);
+void m1_error_event(uint8_t command, uint8_t reply[M1_REPLY_BYTES]);
+bool m1_clock_valid(const m1_clock *clock);
+void m1_clock_second(m1_clock *clock);
+bool m1_rtc_decode(const uint8_t registers[8], m1_clock *clock);
+bool m1_rtc_encode(const m1_clock *clock, uint8_t registers[8]);
 
 /* TM1680 RAM offsets, relative to the stock buffer's first display byte.
- * Group names are numeric: physical colors have not been measured. */
+ * User verified: group 2 (0x13) green, 3 (0x12) yellow, 1 (0x0c) red. */
+enum { M1_GROUP_RED=1, M1_GROUP_GREEN=2, M1_GROUP_YELLOW=3 };
 unsigned m1_hcho_group(uint16_t raw);
 unsigned m1_pm25_group(uint16_t raw);
 void m1_display_groups(uint8_t ram[M1_DISPLAY_BYTES], unsigned hcho, unsigned pm25);

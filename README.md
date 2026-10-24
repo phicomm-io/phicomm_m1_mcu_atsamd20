@@ -1,59 +1,70 @@
 # phicomm_m1_mcu_atsamd20
 
-斐讯 M1 空气检测仪 **ATSAMD20 主控**的原厂固件分析与开源固件工程。目标是让传感器、显示、按键和蜂鸣器能够由可维护的开源代码继续工作，并兼容现有 EMW3080 联网模块。
+斐讯 M1 空气检测仪 **ATSAMD20G18A 主控**的原厂逻辑分析与开源固件。联网模块仍负责 Wi-Fi 和云端通信；本仓库实现传感器、显示、RTC、按键、蜂鸣器及主控升级。
 
-**当前是分析和协议核心阶段，还不能替代原厂主控固件。** 已实现可运行的主机协议核心、传感器报文校验、灯组选择及 RAM 掩码；实际 UART/I²C/定时器/屏幕数字驱动尚未接入。ARM 产物 `core-link-check.elf` 只检查编译、启动代码和内存布局，不提供刷机包。
+**已具备完整应用与独立 Boot 的代码、主机测试和 ARM 构建。尚未刷入实物验证，生成的是开发候选镜像，不是已验收的替代固件。** 原厂备份未公开，也没有执行设备写入或发布刷机版本。
 
-## 已确认的原厂逻辑
+## 实现范围
 
-- 本次实物读取识别为 **ATSAMD20G18A，256 KiB Flash / 32 KiB SRAM**；不能沿用此前 G17A 的容量假设。
-- Bootloader 从 `0x0000` 启动，应用向量表在 `0x4000`，应用版本为 `11.1.2.1`。
-- 应用有 10 个任务，负责显示、甲醛、PM2.5、温湿度、RTC、串口、蜂鸣器与按键等。
-- MCU 与联网模块之间，普通命令 12 字节、返回 20 字节，使用 `23 … 21` 帧边界。
-- 采样返回的 `f[11]/f[12]/f[13]` 分别来自 PM2.5、甲醛、温湿度状态变量；负温度另有符号位。
-- PA10 按键短按切换显示并发送 `0x0f`；长按路径发送 `0x18` 网络重配事件。
-- 找到显示 RAM 的两组独立灯组掩码；可配置阈值与固定灯色比较值的关系需要区分。
-- 原厂 MCU 更新使用内部 Flash 暂存区，再由 Bootloader 搬运；目前仅分析，不实现刷写。
+| 模块 | 实现 |
+| --- | --- |
+| 系统 | 启动与 41 项向量、8 MHz 时钟、1 ms SysTick、协作调度、中断、约 8 秒 WDT |
+| 联网通信 | 三路 UART，IRQ 接收/发送队列、帧流恢复、超时、启动/时间/按键/错误通知 |
+| 甲醛 | 初始化探测、周期请求、校验、重试、原始值查询、原厂低值显示处理 |
+| PM2.5 | 32 字节串口采集、跳过前两帧、低值突升再确认、故障后重新预热 |
+| 温湿度 | I²C 采集、CRC、额外数据读取、原厂四状态定点补偿及显示开关输入 |
+| 显示 | 完整 29 字节 RAM、数字/日期/时间/负号/单位、亮度/开关、全段测试、独立污染物灯色 |
+| RTC | DS1302 兼容三线读写、BCD、日历走时、硬件周期同步、读失败时 RAM 续时 |
+| 按键 | PA10/EIC、20 ms 消抖、短按切屏、长按事件和网络重配通知 |
+| 蜂鸣器 | TC1 PWM、持续/200 ms 单次/重复鸣叫、污染物告警联动 |
+| 状态 | 有效采集更新健康标志、三次坏帧/6 秒超时失效、错误通知、恢复重试 |
+| MCU OTA | `0x12–0x17` 链路、暂存/回读/CRC、元数据提交、独立 Boot 搬运及中断恢复 |
 
-详细依据：[固件逻辑分析](docs/stock-analysis.md)、[引脚与驱动](docs/hardware.md)、[串口协议](docs/protocol.md)、[开发路线](docs/roadmap.md)。
+颜色由用户实机确认：**组 2 / 0x13 绿，组 3 / 0x12 黄，组 1 / 0x0c 红**。甲醛掩码 `0x70` 与 PM 掩码 `0x85` 独立，分别按 `100/300` 和 `75/150` 选择颜色。
+
+原厂程序使用 RTOS；新固件采用协作调度。采样周期、消抖与长按秒数、失效策略及蜂鸣器节奏是明确实现的策略，尚未逐项核准原厂实际时间。详见 [实现与差异](docs/implementation.md)、[协议](docs/protocol.md)、[硬件](docs/hardware.md)。
 
 ## 编译与验证
 
-主机测试只需要 C 编译器、Make 和 Python 3：
+主机测试需要 C 编译器、Make 和 Python 3：
 
 ```sh
-make test
-make sanitize
+make test sanitize
 ```
 
-ARM 编译另需 GNU Arm Embedded 工具链：
+ARM 构建需要 GNU Arm Embedded GCC / Binutils：
 
 ```sh
 # Debian / Ubuntu
 sudo apt install --no-install-recommends gcc-arm-none-eabi binutils-arm-none-eabi
-make link-check
+make firmware bootloader
+# 非默认工具链可用：make firmware bootloader CROSS_COMPILE=/path/to/arm-none-eabi-
 ```
 
-`make link-check` 校验 Cortex-M0+ 编译、`0x4000` 向量表、32 KiB SRAM 和保留 Flash 区域。没有 UART 或传感器驱动的镜像无法维持设备原有功能；不要把这个 ELF 当成可刷固件。
+产物：`build/m1-app.elf`、`build/m1-app.bin`（链接地址 `0x4000`），`build/m1-boot.elf`、`build/m1-boot.bin`（链接地址 `0`）。构建会检查可加载段、向量表和 RAM 边界；每个镜像附带 SHA-256/工具链/源码状态记录。两者是独立产物，不能互换地址。没有自动刷机步骤。
 
-本次验证结果及边界见 [validation.md](docs/validation.md)。公开 CI 不需要原厂镜像。
+[验证记录](docs/validation.md) 分开记录软件、指令对照和实物证据。公开 CI 运行主机测试、ASan/UBSan、应用和 Boot 构建，不上传固件或发布版本。
 
-## 使用自己的备份复现分析
+## 升级与恢复边界
 
-原厂镜像未随仓库分发。把自己的镜像放在忽略目录 `private/`，或使用仓库外路径：
+应用沿用原厂暂存区 `0x22000` 和基础元数据 `0x3ff00`，受 16 位长度约束，最大镜像 65535 字节。独立 Boot 额外检查 `0x3ff40` 的 CRC32 日志，在搬运中断后重新校验并从暂存区重做；已完成的应用由全镜像 CRC 识别，保留提交日志至下一次升级。CRC **不是签名验证**，也没有旧版本回滚副本。
+
+保留原厂 Boot 时，它只使用原有头部，忽略扩展日志，**不能获得新 Boot 的 CRC 和恢复保证**。新 Boot 拒绝没有有效扩展日志的旧式 pending 升级。无有效应用、损坏镜像或无效日志时停留恢复状态，需要 SWD 处理；它没有另一个独立串口救援下载器。细节见 [实现说明](docs/implementation.md)。
+
+## 用自己的备份复现
 
 ```sh
 python3 tools/analyze_stock.py /path/to/your/m1-mcu-backup.bin
 python3 -m venv build/analysis-venv
 build/analysis-venv/bin/pip install -r requirements-analysis.txt
-build/analysis-venv/bin/python tools/disassemble.py /path/to/your/m1-mcu-backup.bin 0x7e68 0x81d8
 build/analysis-venv/bin/python tools/verify_stock.py /path/to/your/m1-mcu-backup.bin
+build/analysis-venv/bin/python tools/verify_runtime_stock.py /path/to/your/m1-mcu-backup.bin
 ```
 
-分析脚本输出镜像哈希、向量表和任务入口；只有哈希匹配已分析样本时才标注固定地址的任务名。可选差分验证器在 Unicorn 的模拟内存中执行原厂纯函数/指定代码块，对照开源实现，不连接设备。
+固定入口的对照工具只接受 [已分析哈希](docs/stock-image.json)。原厂函数只在 Unicorn 的模拟 Flash/SRAM 中执行，不访问硬件。分析依据见 [stock-analysis.md](docs/stock-analysis.md)。
 
-## 范围与许可
+## 来源与许可
 
-本项目是社区项目。原创实现与文档采用 [MIT](LICENSE)；不包含原厂二进制、反编译源码、厂商 SDK 或设备私有日志。研究范围和来源见 [PROVENANCE.md](PROVENANCE.md)。
+原创实现与文档采用 [MIT](LICENSE)。允许复用的库已纳入：Microchip SAMD20 DFP 3.7.231 设备头文件、ARM CMSIS 5.9.0 Cortex-M0+ / GCC 头文件，均保留 Apache-2.0 许可证、固定版本和来源记录，见 [third_party](third_party)。没有包含原厂镜像或反编译源码。详见 [PROVENANCE.md](PROVENANCE.md)。
 
-联网模块社区固件位于 [phicomm-community-firmware](https://github.com/phicomm-io/phicomm-community-firmware)。本仓库负责 ATSAMD20 主控，两者不是同一个 OTA 镜像。
+联网模块固件位于 [phicomm-community-firmware](https://github.com/phicomm-io/phicomm-community-firmware)，与本仓库的主控镜像分别升级。
