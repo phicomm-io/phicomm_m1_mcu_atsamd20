@@ -16,6 +16,11 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends gcc-arm-none-eabi binutils-arm-none-eabi
       - name: Build and validate MCU OTA payload and Boot
         run: make ota
+      - name: Execute ARM clock initialization with SAM D20 register widths
+        run: |
+          python3 -m venv build/hal-venv
+          build/hal-venv/bin/pip install -r requirements-hal.txt
+          build/hal-venv/bin/python tools/verify_platform_clock.py build/m1-app.elf build/m1-boot.elf --report build/platform-clock-verification.json
       - name: Upload MCU OTA candidate
         uses: actions/upload-artifact@v4
         with:
@@ -35,5 +40,6 @@ jobs:
             build/m1-boot.elf
             build/m1-boot.map
             build/m1-boot.json
+            build/platform-clock-verification.json
           if-no-files-found: error
           retention-days: 30

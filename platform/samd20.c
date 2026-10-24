@@ -33,13 +33,22 @@ bool m1_platform_clock(void)
     GCLK_REGS->GCLK_GENCTRL=GCLK_GENCTRL_ID(0)|GCLK_GENCTRL_SRC_OSC8M|GCLK_GENCTRL_GENEN_Msk;
     if(!gsync()) return false;
     PM_REGS->PM_CPUSEL=0; PM_REGS->PM_APBASEL=0; PM_REGS->PM_APBBSEL=0; PM_REGS->PM_APBCSEL=0;
-    /* OSCULP32K / 32 = nominal 1024 Hz; 8192 watchdog ticks ~8 seconds. */
-    GCLK_REGS->GCLK_GENDIV=GCLK_GENDIV_ID(2)|GCLK_GENDIV_DIV(32); if(!gsync()) return false;
-    GCLK_REGS->GCLK_GENCTRL=GCLK_GENCTRL_ID(2)|GCLK_GENCTRL_SRC_OSCULP32K|GCLK_GENCTRL_GENEN_Msk;
-    if(!gsync() || !clock_channel(GCLK_CLKCTRL_ID_WDT,GCLK_CLKCTRL_GEN_GCLK2)) return false;
+    /* GCLK2 has only FIVE DIV bits, despite the generic header's 16-bit mask.
+     * Direct DIV=32 truncates to zero (no division): an 8K watchdog then fires
+     * after 0.25 s, during the PA24 startup wait. Use 2^(4+1)=32 instead.
+     * OSCULP32K / 32 = nominal 1024 Hz; 8192 watchdog ticks ~8 seconds. */
+    const uint32_t wdt_div=GCLK_GENDIV_ID(2)|GCLK_GENDIV_DIV(4);
+    const uint32_t wdt_gen=GCLK_GENCTRL_ID(2)|GCLK_GENCTRL_SRC_OSCULP32K|
+        GCLK_GENCTRL_DIVSEL_Msk|GCLK_GENCTRL_GENEN_Msk;
+    GCLK_REGS->GCLK_GENDIV=wdt_div;
+    if(!gsync() || GCLK_REGS->GCLK_GENDIV!=wdt_div) return false;
+    GCLK_REGS->GCLK_GENCTRL=wdt_gen;
+    if(!gsync() || GCLK_REGS->GCLK_GENCTRL!=wdt_gen ||
+       !clock_channel(GCLK_CLKCTRL_ID_WDT,GCLK_CLKCTRL_GEN_GCLK2)) return false;
     if(!(WDT_REGS->WDT_CTRL&WDT_CTRL_ALWAYSON_Msk)) {
         WDT_REGS->WDT_CTRL=0; if(!wsync()) return false;
-        WDT_REGS->WDT_CONFIG=WDT_CONFIG_PER(10);
+        WDT_REGS->WDT_CONFIG=WDT_CONFIG_PER_8K;
+        if(!wsync()) return false;
         WDT_REGS->WDT_CTRL=WDT_CTRL_ENABLE_Msk; if(!wsync()) return false;
     }
     m1_platform_watchdog();

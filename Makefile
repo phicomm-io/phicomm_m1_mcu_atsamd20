@@ -1,11 +1,12 @@
 HOST_CC ?= cc
 CROSS_COMPILE ?= arm-none-eabi-
 ARM_CC := $(CROSS_COMPILE)gcc
+HAL_PYTHON ?= python3
 HOST_FLAGS := -std=c11 -O2 -g -Wall -Wextra -Werror -Iinclude
 ARM_FLAGS := -std=gnu11 -Os -g -mcpu=cortex-m0plus -mthumb -ffreestanding -fno-builtin -ffunction-sections -fdata-sections -fno-unwind-tables -fno-asynchronous-unwind-tables -Wall -Wextra -Werror -Iinclude -Iplatform -Ithird_party/samd20/include -Ithird_party/cmsis/include
 SOURCES := src/core.c src/rtc.c src/display.c src/climate.c src/update.c src/runtime.c src/debug.c
 PLATFORM := platform/startup.c platform/memory.c platform/samd20.c
-.PHONY: all test sanitize link-check firmware bootloader ota clean
+.PHONY: all test sanitize link-check firmware bootloader ota hal-check clean
 all: test firmware bootloader
 build:
 	mkdir -p $@
@@ -41,5 +42,7 @@ bootloader: | build
 ota: firmware bootloader build/test_update
 	python3 tools/pack_ota.py build/m1-app.bin --manifest build/m1-app.json
 	./build/test_update build/ota/m1-mcu-ota.bin
+hal-check: firmware bootloader
+	$(HAL_PYTHON) tools/verify_platform_clock.py build/m1-app.elf build/m1-boot.elf --report build/platform-clock-verification.json
 clean:
 	rm -rf build

@@ -8,7 +8,7 @@
 #define M1_COMMAND_BYTES 12u
 #define M1_REPLY_BYTES 20u
 #define M1_DISPLAY_BYTES 29u
-#define M1_VERSION "oss-0.3"
+#define M1_VERSION "oss-0.3.1"
 
 typedef struct {
     uint16_t hcho, pm25;

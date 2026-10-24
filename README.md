@@ -2,7 +2,7 @@
 
 斐讯 M1 空气检测仪 **ATSAMD20G18A 主控**的原厂逻辑分析与开源固件。联网模块仍负责 Wi-Fi 和云端通信；本仓库实现传感器、显示、RTC、按键、蜂鸣器及主控升级。
 
-**已具备完整应用与独立 Boot 的代码、主机测试和 ARM 构建。尚未刷入实物验证，生成的是开发候选镜像，不是已验收的替代固件。** 原厂备份未公开，也没有执行设备写入或发布刷机版本。
+**生成的是开发候选镜像，不是已验收的替代固件。用户报告 `oss-0.3` 实机无法启动；`oss-0.3.1` 修复了 GCLK2 分频错误，尚待实机复验。** 已具备应用与独立 Boot 的代码、主机测试和 ARM 构建；原厂备份未公开。故障与验证范围见 [验证记录](docs/validation.md#启动故障与修复)。
 
 ## 实现范围
 
@@ -41,11 +41,15 @@ ARM 构建需要 GNU Arm Embedded GCC / Binutils：
 sudo apt install --no-install-recommends gcc-arm-none-eabi binutils-arm-none-eabi
 make ota
 # 非默认工具链可用：make ota CROSS_COMPILE=/path/to/arm-none-eabi-
+# 执行真实 ARM 时钟初始化代码，检查 SAM D20 分频字段及 WDT 同步
+python3 -m venv build/hal-venv
+build/hal-venv/bin/pip install -r requirements-hal.txt
+make hal-check HAL_PYTHON=build/hal-venv/bin/python
 ```
 
 OTA 包：`build/ota/m1-mcu-ota.bin`、`.json`、`SHA256SUMS`。其他产物：`build/m1-app.elf`、`build/m1-app.bin`（链接地址 `0x4000`），`build/m1-boot.elf`、`build/m1-boot.bin`（链接地址 `0`）。构建会检查可加载段、向量表和 RAM 边界；每个镜像附带 SHA-256/工具链/源码状态记录。两者是独立产物，不能互换地址。没有自动刷机步骤。
 
-[验证记录](docs/validation.md) 分开记录软件、指令对照和实物证据。公开 CI 运行主机测试、ASan/UBSan、应用/Boot 构建和实际 OTA 镜像的接收/搬运模型验证，上传 OTA 候选及独立调试/恢复产物。下载与使用见 [OTA 文档](docs/ota.md)，Wi-Fi MCU 控制 PWM/屏幕见 [调试协议](docs/debug-protocol.md)。不自动刷机或发布正式 Release。
+[验证记录](docs/validation.md) 分开记录软件、指令对照和实物证据。公开 CI 运行主机测试、ASan/UBSan、应用/Boot 构建、ARM 时钟寄存器模型及实际 OTA 镜像的接收/搬运模型验证，上传 OTA 候选及独立调试/恢复产物。下载与使用见 [OTA 文档](docs/ota.md)，Wi-Fi MCU 控制 PWM/屏幕见 [调试协议](docs/debug-protocol.md)。不自动刷机或发布正式 Release。
 
 ## 升级与恢复边界
 

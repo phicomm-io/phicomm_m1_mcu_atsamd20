@@ -1,0 +1,2 @@
+# Execute actual ARM clock initialization in CI without a private stock dump.
+unicorn==2.1.4
