@@ -1,0 +1,10 @@
+{
+  "stock_sha256": "6a8a9f72741e01d5ebc73467819079146553ec73339029eaf4cc49e8cbd1a7f9",
+  "status": "PASS",
+  "crc16_cases": 512,
+  "sht_crc_cases": 64,
+  "display_mask_cases": 16,
+  "display_boundary_cases": 38,
+  "sample_frame_cases": 1,
+  "limits": "pure routines/selected blocks; scheduler helpers stubbed; no hardware or OTA tested"
+}

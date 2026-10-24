@@ -1,0 +1,32 @@
+/* SPDX-License-Identifier: MIT
+ * MCU pin IDs, not EMW3080 GPIO numbers. Extracted pinmux, not PCB continuity. */
+#ifndef M1_BOARD_H
+#define M1_BOARD_H
+#define M1_PIN_PA(n) (n)
+#define M1_PIN_PB(n) (32u + (n))
+#define M1_WIFI_SERCOM_BASE 0x42001400u /* SERCOM3, 115200 baud */
+#define M1_WIFI_TX M1_PIN_PA(22)
+#define M1_WIFI_RX M1_PIN_PA(23)
+#define M1_PM_SERCOM_BASE 0x42000c00u   /* SERCOM1, 9600 baud */
+#define M1_PM_TX M1_PIN_PA(16)
+#define M1_PM_RX M1_PIN_PA(17)
+#define M1_HCHO_SERCOM_BASE 0x42001800u /* SERCOM4, 9600 baud */
+#define M1_HCHO_TX M1_PIN_PB(8)
+#define M1_HCHO_RX M1_PIN_PB(9)
+#define M1_DISPLAY_SERCOM_BASE 0x42000800u /* SERCOM0 I2C */
+#define M1_DISPLAY_SDA M1_PIN_PA(8)
+#define M1_DISPLAY_SCL M1_PIN_PA(9)
+#define M1_DISPLAY_ADDRESS 0x72u
+#define M1_CLIMATE_SERCOM_BASE 0x42001000u /* SERCOM2 I2C */
+#define M1_CLIMATE_SDA M1_PIN_PA(12)
+#define M1_CLIMATE_SCL M1_PIN_PA(13)
+#define M1_CLIMATE_ADDRESS 0x44u
+#define M1_BUTTON M1_PIN_PA(10)
+#define M1_BUZZER M1_PIN_PA(11)
+#define M1_RTC_CE M1_PIN_PA(7)
+#define M1_RTC_CLOCK M1_PIN_PB(3)
+#define M1_RTC_DATA M1_PIN_PB(2)
+#define M1_APPLICATION_ADDRESS 0x00004000u
+#define M1_STAGING_ADDRESS 0x00022000u
+#define M1_UPDATE_METADATA_ADDRESS 0x0003ff00u
+#endif

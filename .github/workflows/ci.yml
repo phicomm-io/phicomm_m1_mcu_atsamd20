@@ -1,0 +1,15 @@
+name: Core and memory layout
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Host behavior tests
+        run: make test sanitize
+      - name: ARM toolchain
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends gcc-arm-none-eabi binutils-arm-none-eabi
+      - name: Cortex-M0+ compile, link and vector checks
+        run: make link-check

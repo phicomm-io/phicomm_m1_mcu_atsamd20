@@ -1,0 +1,10 @@
+/build/
+/private/
+__pycache__/
+*.pyc
+*.bin
+*.elf
+*.map
+*.o
+*.gpr
+*.rep/
