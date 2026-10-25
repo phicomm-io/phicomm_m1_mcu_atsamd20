@@ -32,6 +32,12 @@ typedef struct {
 } m1_sensor_frame;
 typedef struct { uint32_t last_good,errors,timeouts; uint8_t bad; bool seen,fault; } m1_health;
 typedef struct {
+    uint32_t until;
+    uint16_t number;
+    uint8_t format,color;
+    bool valid;
+} m1_display_lane;
+typedef struct {
     m1_state state;
     m1_io io;
     m1_rx rx[3];
@@ -76,6 +82,9 @@ typedef struct {
     uint32_t external_until;
     uint8_t external_format,external_color,external_slot,external_source;
     bool external_valid;
+    /* Independent dual-lane profile; only an explicit source command selects it. */
+    m1_display_lane external_lanes[2];
+    bool external_dual,external_dual_source;
 } m1_runtime;
 typedef enum { M1_BUZZER_OFF, M1_BUZZER_CONTINUOUS, M1_BUZZER_CHIRP, M1_BUZZER_ALARM } m1_buzzer_mode;
 void m1_runtime_pm_mode(m1_runtime *,uint8_t mode,uint32_t now);
