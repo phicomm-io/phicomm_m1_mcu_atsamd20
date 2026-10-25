@@ -54,7 +54,12 @@ static m1_runtime r;
 static bool tx(void *p,m1_channel c,const uint8_t *v,size_t n) {(void)p;(void)c;(void)v;(void)n;return true;}
 static bool rtc(void *p,m1_clock *c) {(void)p;(void)c;return false;}
 void begin(unsigned mode) { m1_io io={.uart=tx,.rtc_read=rtc};m1_runtime_init(&r,&io,0);m1_runtime_pm_mode(&r,(uint8_t)mode,0); }
-unsigned feed(const uint8_t *p) { for(unsigned i=0;i<32;++i) m1_runtime_rx(&r,M1_PM,p[i],1);return r.state.sample.pm25; }
+unsigned feed(const uint8_t *p) {
+    r.pm_armed=true;
+    for(unsigned i=0;i<32;++i) m1_runtime_rx(&r,M1_PM,p[i],1);
+    while(r.pm_armed) m1_runtime_rx(&r,M1_PM,0,1);
+    return r.measured.pm25;
+}
 '''
     cases = 0
     with tempfile.TemporaryDirectory() as d:

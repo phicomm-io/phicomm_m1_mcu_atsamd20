@@ -1,0 +1,142 @@
+{
+  "status": "PASS",
+  "stock_sha256": "6a8a9f72741e01d5ebc73467819079146553ec73339029eaf4cc49e8cbd1a7f9",
+  "schedule": {
+    "hcho": [
+      0,
+      1000,
+      2000,
+      3000,
+      4000,
+      5000,
+      6000,
+      7000,
+      8000,
+      9000,
+      10000,
+      11000,
+      12000,
+      13000,
+      14000
+    ],
+    "climate": [
+      0,
+      1000,
+      2000,
+      3000,
+      4000,
+      5000,
+      6000,
+      7000,
+      8000,
+      9000,
+      10000,
+      11000,
+      12000,
+      13000,
+      14000
+    ],
+    "pm": [
+      0,
+      3000,
+      6000,
+      9000,
+      12000
+    ],
+    "render": [
+      0,
+      3000,
+      6000,
+      9000,
+      12000
+    ],
+    "rtc": [
+      0,
+      1000,
+      2000,
+      3000,
+      4000,
+      5000,
+      6000,
+      7000,
+      8000,
+      9000,
+      10000,
+      11000,
+      12000,
+      13000,
+      14000
+    ]
+  },
+  "screen_timer": {
+    "period_ticks": 100,
+    "send_ticks": [
+      2200,
+      4300,
+      6400,
+      8500,
+      10600,
+      12700
+    ],
+    "steady_period_ticks": 2100
+  },
+  "sample_cache": [
+    {
+      "hcho": 41,
+      "pm": 12,
+      "published_hcho": 41,
+      "temperature": [
+        0,
+        23,
+        45
+      ],
+      "humidity": [
+        56,
+        78
+      ]
+    },
+    {
+      "hcho": 176,
+      "pm": 81,
+      "published_hcho": 176,
+      "temperature": [
+        1,
+        5,
+        50
+      ],
+      "humidity": [
+        63,
+        21
+      ]
+    },
+    {
+      "hcho": 5,
+      "pm": 1600,
+      "published_hcho": 10,
+      "temperature": [
+        0,
+        27,
+        19
+      ],
+      "humidity": [
+        99,
+        99
+      ]
+    }
+  ],
+  "runtime_comparison": {
+    "snapshot_comparisons": 13001,
+    "screen_transfers": [
+      0,
+      2200,
+      4300,
+      6400,
+      8500,
+      10600,
+      12700
+    ],
+    "screen_bytes_compared": 203,
+    "status": "PASS"
+  },
+  "limits": "original ARM instructions with RTOS/I2C helpers stubbed; tick-to-ms uses static clock configuration; no hardware proof"
+}

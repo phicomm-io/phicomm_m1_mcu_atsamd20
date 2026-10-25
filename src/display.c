@@ -6,6 +6,26 @@ static uint8_t glyph(unsigned n) { return font[n % 10]; }
 static void put(uint8_t *ram, unsigned at, unsigned n) { ram[at] = (ram[at] & 8) | glyph(n); }
 uint8_t m1_display_brightness(uint8_t percent)
 { return percent == 25 ? 0xb1 : percent == 50 ? 0xb7 : percent == 75 ? 0xbb : 0xbf; }
+void m1_display_co2(uint8_t ram[M1_DISPLAY_BYTES],uint8_t slot,uint16_t ppm,const uint16_t thresholds[2])
+{
+    unsigned left=slot?24:10,mid=slot?23:9,right=slot?22:4;
+    /* The stock HCHO/PM routines set these legend bits and the right unit bit.
+     * Keep all unrelated date/time/climate segments intact. No CO2/k legend
+     * exists on the glass: the decimal distinguishes ppm from kppm. */
+    ram[21]&=(uint8_t)~(slot?0x85:0x30);
+    ram[left]&=(uint8_t)~8; ram[mid]&=(uint8_t)~8; ram[right]&=(uint8_t)~8;
+    unsigned n=ppm;
+    if(n>=10000) { n=n/100;ram[mid]|=8; }
+    else if(n>=1000) { n=n/10;ram[left]|=8; }
+    put(ram,left,n/100);put(ram,mid,n/10);put(ram,right,n);
+    if(ppm<100)ram[left]&=8;
+    if(ppm<10)ram[mid]&=8;
+    unsigned group=m1_threshold_group(ppm,thresholds);
+    const unsigned offsets[3]={12,19,18};
+    uint8_t mask=slot?0x85:0x70;
+    for(unsigned i=0;i<3;i++)ram[offsets[i]]&=(uint8_t)~mask;
+    ram[group==M1_GROUP_RED?12:group==M1_GROUP_GREEN?19:18]|=mask;
+}
 void m1_display_render(const m1_state *s, uint8_t ram[M1_DISPLAY_BYTES])
 {
     for (unsigned i=0; i<M1_DISPLAY_BYTES; ++i) ram[i] = s->display_test ? 0xff : 0;
@@ -38,5 +58,6 @@ void m1_display_render(const m1_state *s, uint8_t ram[M1_DISPLAY_BYTES])
     if (rh>=10000) rh=9990;
     put(ram,7,rh/1000); put(ram,6,rh/100); put(ram,5,rh/10); ram[6]|=8; ram[5]|=8;
     ram[8]|=0x74; ram[21]|=0xf7;
-    m1_display_groups(ram,m1_hcho_group(s->hcho_raw),m1_pm25_group(s->sample.pm25));
+    m1_display_groups(ram,m1_threshold_group(s->hcho_raw,s->hcho_threshold),
+                      m1_threshold_group(s->sample.pm25,s->pm25_threshold));
 }

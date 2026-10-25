@@ -1,0 +1,12 @@
+{
+  "status": "PASS",
+  "stock_sha256": "6a8a9f72741e01d5ebc73467819079146553ec73339029eaf4cc49e8cbd1a7f9",
+  "write_cases": 268,
+  "stock_accepts_equal_reversed_and_zero": true,
+  "native_valid_write_comparisons": 130,
+  "native_reversed_pair_rejections": 138,
+  "render_cases": 72,
+  "threshold_reads_during_render": 0,
+  "threshold_ram_changes_do_not_change_stock_lamp_groups": true,
+  "limits": "selected ARM dispatch/render blocks with helpers stubbed; no full-program consumer proof or hardware validation"
+}

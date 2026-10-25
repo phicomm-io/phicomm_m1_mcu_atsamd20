@@ -30,8 +30,8 @@ static void protocol(void)
     frame(f, 5); f[3] = 100; f[4] = 1; f[5] = 44;
     assert(m1_command(&s, f, r) == M1_APPLIED);
     assert(s.hcho_threshold[0] == 100 && s.hcho_threshold[1] == 300);
-    assert(s.pm25_threshold[0] == 0);
-    f[3] = 0; f[4] = 0; f[5] = 0;
+    assert(s.pm25_threshold[0] == 75 && s.pm25_threshold[1] == 150);
+    f[2] = 1; f[3] = 45;
     assert(m1_command(&s, f, r) == M1_BAD_FRAME && s.hcho_threshold[0] == 100);
     frame(f, 0x0e); f[2] = 1;
     assert(m1_command(&s, f, r) == M1_APPLIED && s.buzzer_on);
@@ -99,9 +99,37 @@ static void display(void)
     assert(ram[0x12] == 0x78 && ram[0x13] == 0x8d && ram[0x0c] == 8);
 }
 
+static void thresholds(void)
+{
+    m1_state s; m1_init(&s);
+    /* Defaults preserve the original groups across the entire wire range. */
+    for(unsigned v=0;v<=UINT16_MAX;++v) {
+        assert(m1_threshold_group((uint16_t)v,s.hcho_threshold)==m1_hcho_group((uint16_t)v));
+        assert(m1_threshold_group((uint16_t)v,s.pm25_threshold)==m1_pm25_group((uint16_t)v));
+    }
+    uint8_t f[12],r[20];frame(f,5);
+    f[2]=0x12;f[3]=0x34;f[4]=0xab;f[5]=0xcd;
+    assert(m1_command(&s,f,r)==M1_APPLIED);
+    assert(s.hcho_threshold[0]==0x1234 && s.hcho_threshold[1]==0xabcd);
+    assert(s.pm25_threshold[0]==75 && s.pm25_threshold[1]==150);
+    assert(m1_threshold_group(0x1234,s.hcho_threshold)==M1_GROUP_GREEN);
+    assert(m1_threshold_group(0x1235,s.hcho_threshold)==M1_GROUP_YELLOW);
+    assert(m1_threshold_group(0xabcd,s.hcho_threshold)==M1_GROUP_YELLOW);
+    assert(m1_threshold_group(0xabce,s.hcho_threshold)==M1_GROUP_RED);
+    m1_state before=s;f[2]=0xff;f[3]=0xff;
+    assert(m1_command(&s,f,r)==M1_BAD_FRAME && !memcmp(&s,&before,sizeof(s)));
+    /* Equal/zero endpoints are values, not a disable command. */
+    frame(f,6);assert(m1_command(&s,f,r)==M1_APPLIED);
+    assert(m1_threshold_group(0,s.pm25_threshold)==M1_GROUP_GREEN);
+    assert(m1_threshold_group(1,s.pm25_threshold)==M1_GROUP_RED);
+    f[2]=f[3]=f[4]=f[5]=0xff;assert(m1_command(&s,f,r)==M1_APPLIED);
+    assert(m1_threshold_group(UINT16_MAX,s.pm25_threshold)==M1_GROUP_GREEN);
+    assert(s.hcho_threshold[0]==0x1234 && s.hcho_threshold[1]==0xabcd);
+}
+
 int main(void)
 {
-    protocol(); stream(); sensors(); display();
+    protocol(); stream(); sensors(); display(); thresholds();
     assert(m1_stock_crc_byte(0, 0xff) == 0xff);
     puts("PASS: protocol, framing recovery, calendar, sensors, display boundaries");
     return 0;

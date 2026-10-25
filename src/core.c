@@ -15,6 +15,8 @@ void m1_init(m1_state *state)
     *state = (m1_state){0};
     state->brightness = 100;
     state->display_on = true;
+    state->hcho_threshold[0] = 100; state->hcho_threshold[1] = 300;
+    state->pm25_threshold[0] = 75; state->pm25_threshold[1] = 150;
     /* Health remains zero until a real sensor driver publishes a sample. */
 }
 
@@ -79,10 +81,11 @@ m1_result m1_command(m1_state *s, const uint8_t f[M1_COMMAND_BYTES], uint8_t rep
     }
     case 5: case 6: {
         uint16_t a = be16(f + 2), b = be16(f + 4);
-        if (a >= b) return M1_BAD_FRAME;
+        if (a > b) return M1_BAD_FRAME;
         uint16_t *p = f[1] == 5 ? s->hcho_threshold : s->pm25_threshold;
         p[0] = a; p[1] = b;
-        /* Stored in RAM only. Stock color rendering uses fixed comparisons. */
+        /* Original write format; configurable colors/alarm are OSS extensions.
+         * Equality collapses the yellow band; zero is a value, not disable. */
         return M1_APPLIED;
     }
     case 0x0d:
@@ -121,6 +124,8 @@ void m1_error_event(uint8_t command, uint8_t reply[M1_REPLY_BYTES])
 
 unsigned m1_hcho_group(uint16_t value) { return value <= 100 ? 2u : value <= 300 ? 3u : 1u; }
 unsigned m1_pm25_group(uint16_t value) { return value <= 75 ? 2u : value <= 150 ? 3u : 1u; }
+unsigned m1_threshold_group(uint16_t value, const uint16_t thresholds[2])
+{ return value <= thresholds[0] ? M1_GROUP_GREEN : value <= thresholds[1] ? M1_GROUP_YELLOW : M1_GROUP_RED; }
 static void group(uint8_t *ram, unsigned g, uint8_t mask)
 {
     static const uint8_t offsets[] = {0x0c, 0x13, 0x12};

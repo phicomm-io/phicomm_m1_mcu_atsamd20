@@ -25,6 +25,18 @@ static void screen(m1_runtime *r,uint32_t now)
     if(!r->debug_display) r->debug_state=r->state;
     r->debug_display=true; r->debug_display_until=now+LEASE_MS; r->dirty=true;
 }
+void m1_co2_poll(m1_runtime *r,uint32_t now)
+{
+    if(r->co2_valid && due(now,r->co2_until))r->co2_valid=false;
+    bool show=r->co2_mode && r->co2_valid;
+    if(show && r->co2_mode==2) {
+        uint32_t period=(uint32_t)r->co2_interval*1000;
+        uint32_t elapsed=now-r->co2_phase_at;
+        if(elapsed>=period*2) { r->co2_phase_at+=(elapsed/(period*2))*(period*2);elapsed=now-r->co2_phase_at; }
+        show=elapsed<period;
+    }
+    if(show!=r->co2_show){r->co2_show=show;r->dirty=true;}
+}
 bool m1_debug_command(m1_runtime *r,const uint8_t p[12],uint8_t out[20],uint32_t now)
 {
     if(p[1]!=0x70) return false;
@@ -35,7 +47,7 @@ bool m1_debug_command(m1_runtime *r,const uint8_t p[12],uint8_t out[20],uint32_t
     switch(p[2]) {
     case 0:
         if(!zero(a,7)) goto invalid;
-        out[5]=1; put16(out+6,0x01ff); put16(out+8,LEASE_MS);
+        out[5]=2; put16(out+6,0x3fff); put16(out+8,LEASE_MS);
         out[10]=r->io.buzzer_pwm!=0; break;
     case 1: {
         uint16_t hz=be16(a),ms=be16(a+3);
@@ -90,9 +102,52 @@ bool m1_debug_command(m1_runtime *r,const uint8_t p[12],uint8_t out[20],uint32_t
         uint8_t ram[M1_DISPLAY_BYTES];
         if(r->debug_display && r->debug_raw) {
             for(unsigned i=0;i<M1_DISPLAY_BYTES;++i) ram[i]=r->debug_ram[i];
-        } else m1_display_render(r->debug_display?&r->debug_state:&r->state,ram);
+        } else if(r->debug_display) m1_display_render(&r->debug_state,ram);
+        else for(unsigned i=0;i<M1_DISPLAY_BYTES;++i) ram[i]=r->state.display_test?0xff:r->display_ram[i];
+        if(!r->debug_display && !r->state.display_test && r->co2_show)
+            m1_display_co2(ram,r->co2_slot,r->co2_ppm,r->co2_threshold);
         out[5]=a[0]; out[6]=a[1]; for(unsigned i=0;i<a[1];++i) out[7+i]=ram[a[0]+i]; break;
     }
+    case 9:
+        if(!zero(a,7)) goto invalid;
+        put16(out+5,r->state.hcho_threshold[0]); put16(out+7,r->state.hcho_threshold[1]);
+        put16(out+9,r->state.pm25_threshold[0]); put16(out+11,r->state.pm25_threshold[1]);
+        out[13]=3; /* bit 0: configurable lamps; bit 1: high-band alarm */
+        break;
+    case 10: {
+        uint16_t seconds=be16(a+2);
+        if(a[0]>2 || a[1]>1 || !seconds || seconds>3600 || !zero(a+4,3))goto invalid;
+        if(r->co2_mode!=a[0] || r->co2_slot!=a[1] || r->co2_interval!=seconds)r->co2_phase_at=now;
+        r->co2_mode=a[0];r->co2_slot=a[1];r->co2_interval=seconds;r->dirty=true;
+        m1_co2_poll(r,now);break;
+    }
+    case 11: {
+        uint16_t low=be16(a+1),high=be16(a+3);
+        if(a[0]>2 || low>high || !zero(a+5,2))goto invalid;
+        uint16_t *pair=a[0]==0?r->state.hcho_threshold:a[0]==1?r->state.pm25_threshold:r->co2_threshold;
+        pair[0]=low;pair[1]=high;
+        if(a[0]<2 && r->debug_display) {
+            uint16_t *overlay=a[0]?r->debug_state.pm25_threshold:r->debug_state.hcho_threshold;
+            overlay[0]=low;overlay[1]=high;
+        }
+        r->dirty=true;break;
+    }
+    case 12: {
+        uint16_t ppm=be16(a),ttl=be16(a+3);
+        if(a[2]>1 || !zero(a+5,2) || (a[2] && (!ppm || !ttl || ttl>60)))goto invalid;
+        bool fresh=!r->co2_valid || due(now,r->co2_until);
+        if(r->co2_ppm!=ppm || r->co2_valid!=(a[2]!=0))r->dirty=true;
+        r->co2_ppm=ppm;r->co2_valid=a[2]!=0;r->co2_until=now+(uint32_t)ttl*1000;
+        if(fresh && r->co2_valid)r->co2_phase_at=now;
+        m1_co2_poll(r,now);break;
+    }
+    case 13:
+        if(!zero(a,7))goto invalid;
+        m1_co2_poll(r,now);
+        out[5]=r->co2_mode;out[6]=r->co2_slot;put16(out+7,r->co2_interval);
+        put16(out+9,r->co2_threshold[0]);put16(out+11,r->co2_threshold[1]);
+        put16(out+13,r->co2_ppm);out[15]=r->co2_valid;out[16]=r->co2_show;
+        put16(out+17,r->co2_valid?(uint16_t)((r->co2_until-now+999)/1000):0);break;
     default: out[4]=3; break;
     }
     return true;

@@ -58,6 +58,7 @@ bool m1_rtc_encode(const m1_clock *clock, uint8_t registers[8]);
 enum { M1_GROUP_RED=1, M1_GROUP_GREEN=2, M1_GROUP_YELLOW=3 };
 unsigned m1_hcho_group(uint16_t raw);
 unsigned m1_pm25_group(uint16_t raw);
+unsigned m1_threshold_group(uint16_t raw, const uint16_t thresholds[2]);
 void m1_display_groups(uint8_t ram[M1_DISPLAY_BYTES], unsigned hcho, unsigned pm25);
 
 /* This is the recovered OTA bit-input CRC, not CRC-16/CCITT-FALSE. */

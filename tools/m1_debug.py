@@ -10,11 +10,17 @@ def encode(op, seq, payload=b''):
     return bytes((0x23, 0x70, op, seq)) + payload.ljust(7, b'\0') + b'\x21'
 
 
+def encode_threshold(sensor, low, high):
+    if sensor not in ('hcho', 'pm25') or not 0 <= low <= high <= 65535:
+        raise ValueError('thresholds require hcho/pm25 and 0 <= low <= high <= 65535')
+    return bytes((0x23, 5 if sensor == 'hcho' else 6)) + struct.pack('>HH', low, high) + bytes(5) + b'\x21'
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--seq', type=int, default=1)
     sub = parser.add_subparsers(dest='command', required=True)
-    for name in ('caps', 'status', 'exit'):
+    for name in ('caps', 'status', 'exit', 'thresholds'):
         sub.add_parser(name)
     p = sub.add_parser('pwm')
     p.add_argument('hz', type=int); p.add_argument('duty', type=int); p.add_argument('milliseconds', type=int)
@@ -30,10 +36,16 @@ def main():
     p.add_argument('offset', type=lambda s: int(s, 0)); p.add_argument('count', type=int)
     p = sub.add_parser('pm-mode')
     p.add_argument('mode', type=int, choices=(0, 2, 3))
+    p = sub.add_parser('threshold')
+    p.add_argument('sensor', choices=('hcho', 'pm25'))
+    p.add_argument('low', type=int); p.add_argument('high', type=int)
     a = parser.parse_args()
     payload = b''
-    operations = dict(caps=0, pwm=1, sample=2, display=3, raw=4, exit=5, status=6, **{'pm-mode': 7}, read=8)
+    operations = dict(caps=0, pwm=1, sample=2, display=3, raw=4, exit=5, status=6, **{'pm-mode': 7}, read=8, thresholds=9)
     try:
+        if a.command == 'threshold':
+            print(encode_threshold(a.sensor, a.low, a.high).hex(' '))
+            return
         if a.command == 'pwm':
             if not (0 <= a.duty <= 100 and (a.duty == 0 or (100 <= a.hz <= 10000 and 1 <= a.milliseconds <= 10000))):
                 raise ValueError('PWM requires 100..10000 Hz, duty 0..100 and 1..10000 ms; duty 0 stops')
