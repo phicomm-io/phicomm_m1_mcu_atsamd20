@@ -1,6 +1,6 @@
 # M1 sensor MCU firmware
 
-Open-source firmware for the ATSAMD20G18A controller in the Phicomm M1 air monitor. It handles sensors, display, clock, buttons, buzzer and controller updates. The separate [network firmware](https://github.com/phicomm-io/phicomm-community-firmware) provides Wi-Fi, MQTT and WebUI; the two processors are updated separately.
+Open-source firmware for the ATSAMD20G18A controller in the Phicomm M1 air monitor. It handles sensors, display, clock, buttons, buzzer and controller updates. The separate [network firmware](https://github.com/phicomm-io/iotcloud-community-firmware) provides Wi-Fi, MQTT and WebUI; the two processors are updated separately.
 
 Factory **11.x** users are the recommended starting group. Factory **17.1.2.3 / 17.x** differs substantially and is not recommended until its image has been obtained and analysed. WebUI displays the raw sensor MCU version separately from the network firmware. Factory and open-source version numbers are independent; an unread version stays unknown.
 

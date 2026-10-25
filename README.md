@@ -1,6 +1,6 @@
 # M1 传感器主控固件
 
-斐讯 M1 空气检测仪 ATSAMD20G18A 主控的开源固件，负责传感器采集、屏幕、时钟、按键、蜂鸣器和主控升级。Wi-Fi、MQTT 和 WebUI 由配套[联网模块固件](https://github.com/phicomm-io/phicomm-community-firmware)提供，两个处理器分别升级。
+斐讯 M1 空气检测仪 ATSAMD20G18A 主控的开源固件，负责传感器采集、屏幕、时钟、按键、蜂鸣器和主控升级。Wi-Fi、MQTT 和 WebUI 由配套[联网模块固件](https://github.com/phicomm-io/iotcloud-community-firmware)提供，两个处理器分别升级。
 
 ## 兼容性
 
