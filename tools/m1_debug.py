@@ -22,6 +22,8 @@ def main():
     sub = parser.add_subparsers(dest='command', required=True)
     for name in ('caps', 'status', 'exit', 'thresholds'):
         sub.add_parser(name)
+    p = sub.add_parser('tone')
+    p.add_argument('name', choices=('off', 'tap', 'confirm', 'notice', 'error'))
     p = sub.add_parser('pwm')
     p.add_argument('hz', type=int); p.add_argument('duty', type=int); p.add_argument('milliseconds', type=int)
     p = sub.add_parser('sample')
@@ -41,12 +43,14 @@ def main():
     p.add_argument('low', type=int); p.add_argument('high', type=int)
     a = parser.parse_args()
     payload = b''
-    operations = dict(caps=0, pwm=1, sample=2, display=3, raw=4, exit=5, status=6, **{'pm-mode': 7}, read=8, thresholds=9)
+    operations = dict(caps=0, pwm=1, sample=2, display=3, raw=4, exit=5, status=6, **{'pm-mode': 7}, read=8, thresholds=9, tone=14)
     try:
         if a.command == 'threshold':
             print(encode_threshold(a.sensor, a.low, a.high).hex(' '))
             return
-        if a.command == 'pwm':
+        if a.command == 'tone':
+            payload = bytes((('off', 'tap', 'confirm', 'notice', 'error').index(a.name),))
+        elif a.command == 'pwm':
             if not (0 <= a.duty <= 100 and (a.duty == 0 or (100 <= a.hz <= 10000 and 1 <= a.milliseconds <= 10000))):
                 raise ValueError('PWM requires 100..10000 Hz, duty 0..100 and 1..10000 ms; duty 0 stops')
             payload = struct.pack('>HBH', a.hz, a.duty, a.milliseconds)

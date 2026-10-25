@@ -9,9 +9,20 @@ static bool zero(const uint8_t *p,unsigned n)
 { for(unsigned i=0;i<n;++i) if(p[i]) return false; return true; }
 static void stop_buzzer(m1_runtime *r)
 {
+    m1_music_stop(&r->music);
+    r->music_applied=false;
     r->debug_buzzer=false;
     if(r->io.buzzer_pwm) (void)r->io.buzzer_pwm(r->io.context,2000,50);
     r->io.buzzer(r->io.context,false); r->buzzer_applied=false;
+}
+static uint8_t start_buzzer(m1_runtime *r,uint16_t hz,uint8_t duty,uint16_t ms,uint32_t now)
+{
+    if(!r->io.buzzer_pwm) return 3;
+    m1_music_stop(&r->music);r->music_applied=false;
+    if(!r->io.buzzer_pwm(r->io.context,hz,duty)) { stop_buzzer(r); return 4; }
+    r->debug_buzzer=true; r->debug_buzzer_until=now+ms;
+    r->io.buzzer(r->io.context,true);
+    return 0;
 }
 void m1_debug_poll(m1_runtime *r,uint32_t now)
 {
@@ -47,17 +58,14 @@ bool m1_debug_command(m1_runtime *r,const uint8_t p[12],uint8_t out[20],uint32_t
     switch(p[2]) {
     case 0:
         if(!zero(a,7)) goto invalid;
-        out[5]=2; put16(out+6,0x3fff); put16(out+8,LEASE_MS);
+        out[5]=2; put16(out+6,0xffff); put16(out+8,LEASE_MS);
         out[10]=r->io.buzzer_pwm!=0; break;
     case 1: {
         uint16_t hz=be16(a),ms=be16(a+3);
         if(!zero(a+5,2) || a[2]>100) goto invalid;
         if(!a[2]) { stop_buzzer(r); break; }
         if(hz<100 || hz>10000 || !ms || ms>LEASE_MS) goto invalid;
-        if(!r->io.buzzer_pwm) { out[4]=3; break; }
-        if(!r->io.buzzer_pwm(r->io.context,hz,a[2])) { stop_buzzer(r); out[4]=4; break; }
-        r->debug_buzzer=true; r->debug_buzzer_until=now+ms;
-        r->io.buzzer(r->io.context,true); break;
+        out[4]=start_buzzer(r,hz,a[2],ms,now); break;
     }
     case 2: {
         uint16_t hcho=be16(a),pm=be16(a+2),bits=be16(a+4);
@@ -100,12 +108,7 @@ bool m1_debug_command(m1_runtime *r,const uint8_t p[12],uint8_t out[20],uint32_t
     case 8: {
         if(a[1]<1 || a[1]>12 || a[0]>=M1_DISPLAY_BYTES || a[1]>M1_DISPLAY_BYTES-a[0] || !zero(a+2,5)) goto invalid;
         uint8_t ram[M1_DISPLAY_BYTES];
-        if(r->debug_display && r->debug_raw) {
-            for(unsigned i=0;i<M1_DISPLAY_BYTES;++i) ram[i]=r->debug_ram[i];
-        } else if(r->debug_display) m1_display_render(&r->debug_state,ram);
-        else for(unsigned i=0;i<M1_DISPLAY_BYTES;++i) ram[i]=r->state.display_test?0xff:r->display_ram[i];
-        if(!r->debug_display && !r->state.display_test && r->co2_show)
-            m1_display_co2(ram,r->co2_slot,r->co2_ppm,r->co2_threshold);
+        m1_runtime_display_ram(r,ram);
         out[5]=a[0]; out[6]=a[1]; for(unsigned i=0;i<a[1];++i) out[7+i]=ram[a[0]+i]; break;
     }
     case 9:
@@ -148,6 +151,26 @@ bool m1_debug_command(m1_runtime *r,const uint8_t p[12],uint8_t out[20],uint32_t
         put16(out+9,r->co2_threshold[0]);put16(out+11,r->co2_threshold[1]);
         put16(out+13,r->co2_ppm);out[15]=r->co2_valid;out[16]=r->co2_show;
         put16(out+17,r->co2_valid?(uint16_t)((r->co2_until-now+999)/1000):0);break;
+    case 14: {
+        /* Each preset is a single uninterrupted tone, not a melody. ID 0
+         * exits the override. Ordinary manual/alarm policy then resumes. */
+        static const struct { uint16_t hz,ms; } tones[]={
+            {0,0},{2000,60},{2500,120},{1500,250},{1000,500}
+        };
+        if(a[0]>=sizeof(tones)/sizeof(tones[0]) || !zero(a+1,6))goto invalid;
+        if(!a[0]) { stop_buzzer(r); break; }
+        out[4]=start_buzzer(r,tones[a[0]].hz,50,tones[a[0]].ms,now);
+        if(!out[4]) {
+            out[5]=a[0];put16(out+6,tones[a[0]].hz);put16(out+8,tones[a[0]].ms);out[10]=50;
+        }
+        break;
+    }
+    case 15:
+        if(a[0]==5 && !r->io.buzzer_pwm){out[4]=3;break;}
+        out[4]=m1_music_command(&r->music,&r->io.flash,a,out+5,now);
+        if(!out[4] && a[0]==5){r->debug_buzzer=false;r->music_applied=true;}
+        if(!out[4] && a[0]==6)stop_buzzer(r);
+        break;
     default: out[4]=3; break;
     }
     return true;

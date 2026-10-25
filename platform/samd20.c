@@ -345,6 +345,9 @@ static bool mutable_address(uint32_t at,size_t n)
     if(at>=0x40000u || n>0x40000u-at) return false;
     if(at>=M1_UPDATE_METADATA_ADDRESS && at+n<=0x40000u) return true;
     if(at>=M1_STAGING_ADDRESS && at+n<=M1_STAGING_ADDRESS+0x10100u) return true;
+#ifndef M1_BOOTLOADER
+    if(at>=M1_MUSIC_ADDRESS && at+n<=M1_MUSIC_ADDRESS+2*M1_MUSIC_SLOT) return true;
+#endif
 #ifdef M1_BOOTLOADER
     if(at>=M1_APPLICATION_ADDRESS && at+n<=M1_APPLICATION_ADDRESS+0x10000u) return true;
 #endif

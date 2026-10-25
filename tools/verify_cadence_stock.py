@@ -179,7 +179,9 @@ void screen(uint8_t *out) {memcpy(out,ram,29);}
         lib.screen.argtypes = [C.c_void_p]
         lib.begin()
         expected = (0, 0, 0, 0)
-        screen_times = [0]+timer['send_ticks']
+        # User-requested colon overlay adds 500-ms transfers; stock's 3-second
+        # numeric cache and 2100-ms refresh phase remain independently checked.
+        screen_times = sorted(set(range(0, 13001, 500)) | set(timer['send_ticks']))
         display_ram = bytes(29)
         actual_times = []
         for ms in range(13001):
@@ -202,11 +204,15 @@ void screen(uint8_t *out) {memcpy(out,ram,29);}
                 actual_times.append(ms)
                 actual = (C.c_uint8*29)()
                 lib.screen(actual)
-                assert bytes(actual) == display_ram, ('screen', ms, bytes(actual).hex(), display_ram.hex())
+                want = bytearray(display_ram)
+                for index in (0, 3):
+                    want[index] = (want[index] & ~8) | (8 if (ms//500) % 2 == 0 else 0)
+                assert bytes(actual) == want, ('screen', ms, bytes(actual).hex(), want.hex())
             assert len(actual_times) == len([t for t in screen_times if t <= ms])
         assert actual_times == screen_times
     return dict(snapshot_comparisons=13001, screen_transfers=actual_times,
-                screen_bytes_compared=len(actual_times)*29, status='PASS')
+                screen_bytes_compared=len(actual_times)*29,
+                overlay='1 Hz colon: 500 ms on / 500 ms off; other bits match stock cache', status='PASS')
 
 
 def verify(blob):

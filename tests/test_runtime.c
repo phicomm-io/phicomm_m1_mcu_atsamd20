@@ -6,7 +6,7 @@
 #include <string.h>
 typedef struct {
     unsigned commands[3][256],rtc_writes,resets,display_writes,buzz_changes;
-    uint32_t display_times[32],now;
+    uint32_t display_times[64],now;
     uint8_t last[3][32],screen[29];size_t last_size[3];
     bool bus_fail,tx_fail,rtc_ok,buzz,status_crc_bad,pwm_fail,wifi,reset_nack;
     uint16_t status,pwm_hz; uint8_t pwm_duty; unsigned status_reads,soft_resets,reset_attempts;
@@ -23,7 +23,7 @@ static bool i2c(void *ctx,unsigned bus,uint8_t addr,const uint8_t *tx,size_t nt,
     fake *v=ctx;if(v->bus_fail) return false;
     if(bus==0) { assert(addr==0x72 && !nr);if(nt==30) {
         memcpy(v->screen,tx+1,29);
-        if(v->display_writes<32) v->display_times[v->display_writes]=v->now;
+        if(v->display_writes<64) v->display_times[v->display_writes]=v->now;
         v->display_writes++;
     } }
     else { assert(bus==2 && addr==0x44);if(nr) {
@@ -199,7 +199,9 @@ static void sensor_cadence(void)
             assert(r.state.sample.pm25==(snapshot?snapshot%211:0));
             assert(r.state.sample.temperature_centi_c==(snapshot?-550+(int32_t)(snapshot%100):0));
             assert(r.state.sample.humidity_centi_pct==(snapshot?5500+snapshot%79:0));
-            if(ms<2200) assert(!memcmp(initial,f.screen,29));
+            if(ms<2200) for(unsigned i=0;i<29;++i)
+                assert((f.screen[i]&(i==0 || i==3?0xf7:0xff))==
+                       (initial[i]&(i==0 || i==3?0xf7:0xff)));
             if(ms==1000 || ms==3001) {
                 cmd(1,0,0,start+ms);
                 assert(((unsigned)f.last[M1_LINK][2]<<8|f.last[M1_LINK][3])==r.state.sample.hcho);
@@ -208,9 +210,11 @@ static void sensor_cadence(void)
                 assert(((unsigned)f.last[M1_LINK][2]<<8|f.last[M1_LINK][3])==150+ms%997);
             }
         }
-        const unsigned transfers[]={0,2200,4300,6400,8500,10600,12700};
-        assert(f.display_writes==sizeof(transfers)/sizeof(transfers[0]));
-        for(unsigned i=0;i<f.display_writes;++i) assert(f.display_times[i]==start+transfers[i]);
+        unsigned writes=0;
+        for(unsigned ms=0;ms<=13000;++ms)
+            if(ms%500==0 || (ms>=2200 && (ms-2200)%2100==0))
+                assert(f.display_times[writes++]==start+ms);
+        assert(f.display_writes==writes);
     }
     /* Commands, debug, and error recovery cannot publish newer measurements
      * or advance the low-HCHO latch between normal render deadlines. */
@@ -332,6 +336,73 @@ static void co2_tests(void)
     value[2]=1;value[4]=2;debug(12,value,UINT32_MAX-900);
     tick(1000,false);assert(r.co2_show);tick(1100,false);assert(!r.co2_show);
 }
+static void colon_tests(void)
+{
+    const uint32_t origins[]={0,UINT32_MAX-250};
+    for(unsigned i=0;i<2;++i) {
+        uint32_t start=origins[i];init(start);tick(start,false);
+        uint8_t original[29];memcpy(original,f.screen,29);
+        tick(start+499,false);assert((f.screen[0]&8) && (f.screen[3]&8));
+        tick(start+500,false);assert(!(f.screen[0]&8) && !(f.screen[3]&8));
+        for(unsigned j=0;j<29;++j)
+            assert(f.screen[j]==(uint8_t)(original[j] & (j==0 || j==3?0xf7:0xff)));
+        uint8_t get[7]={0,4};debug(8,get,start+500);
+        assert(!memcmp(f.last[M1_LINK]+7,f.screen,4));
+        tick(start+999,false);assert(!(f.screen[0]&8));
+        tick(start+1000,false);assert((f.screen[0]&8) && (f.screen[3]&8));
+        /* A stalled poll skips missed phases in one transfer. */
+        unsigned writes=f.display_writes;tick(start+2750,false);
+        assert(f.display_writes==writes+1 && !r.colon_on && r.colon_at==start+3000);
+    }
+    init(0);tick(0,false);f.bus_fail=true;tick(500,false);
+    assert(r.dirty && r.display_errors==1);f.bus_fail=false;
+    tick(1000,false);assert(r.display_errors==1);
+    tick(1500,false);assert(!r.dirty && !(f.screen[0]&8));
+    /* Raw and full-segment diagnostics bypass the blink overlay. */
+    uint8_t raw[7]={0,4,0xff,0xff,0xff,0xff};debug(4,raw,1600);tick(1600,false);
+    unsigned writes=f.display_writes;tick(2000,false);assert(f.display_writes==writes);
+    for(unsigned j=0;j<4;++j)assert(f.screen[j]==0xff);
+    uint8_t all[7]={100,1,1,0x13,0x88};debug(3,all,2100);tick(2100,false);tick(2500,false);
+    for(unsigned j=0;j<29;++j)assert(f.screen[j]==0xff);
+    debug(5,0,2600);tick(2600,false);assert(!(f.screen[0]&8));
+    cmd(2,100,0,2700);tick(2700,false);writes=f.display_writes;
+    tick(3000,false);assert(f.display_writes==writes);
+    cmd(2,100,1,3100);tick(3100,false);assert((f.screen[0]&8) && (f.screen[3]&8));
+    /* Explicit time synchronization restarts a complete lit half-cycle. */
+    uint8_t time[12]={0x23,3,0x07,0xea,10,25,12,34,56,0,0,0x21};
+    bytes(M1_LINK,time,12,3700);tick(3700,false);assert(r.colon_on && r.colon_at==4200);
+    tick(4199,false);assert(f.screen[0]&8);tick(4200,false);assert(!(f.screen[0]&8));
+}
+static void tone_tests(void)
+{
+    const uint16_t hz[]={0,2000,2500,1500,1000},ms[]={0,60,120,250,500};
+    for(unsigned id=1;id<=4;++id) {
+        init(0);uint8_t a[7]={(uint8_t)id};debug(14,a,10);
+        assert(f.last[M1_LINK][4]==0 && f.last[M1_LINK][5]==id);
+        assert(((unsigned)f.last[M1_LINK][6]<<8|f.last[M1_LINK][7])==hz[id]);
+        assert(((unsigned)f.last[M1_LINK][8]<<8|f.last[M1_LINK][9])==ms[id]);
+        assert(f.last[M1_LINK][10]==50 && r.debug_buzzer && f.buzz);
+        assert(f.pwm_hz==hz[id] && f.pwm_duty==50);
+        tick(10+ms[id]-1,false);assert(f.buzz);
+        tick(10+ms[id],false);assert(!f.buzz && !r.debug_buzzer && f.pwm_hz==2000);
+    }
+    init(0);uint8_t a[7]={4};debug(14,a,0);
+    a[0]=5;debug(14,a,1);assert(f.last[M1_LINK][4]==1 && r.debug_buzzer_until==500 && f.buzz);
+    a[0]=1;a[6]=1;debug(14,a,2);assert(f.last[M1_LINK][4]==1 && f.pwm_hz==1000);
+    a[6]=0;debug(14,a,100);assert(r.debug_buzzer_until==160 && f.pwm_hz==2000);
+    a[0]=0;debug(14,a,101);assert(!f.buzz && !r.debug_buzzer);
+    r.io.buzzer_pwm=0;a[0]=2;debug(14,a,102);assert(f.last[M1_LINK][4]==3 && !f.buzz);
+    r.io.buzzer_pwm=pwm;f.pwm_fail=true;debug(14,a,103);
+    assert(f.last[M1_LINK][4]==4 && !f.buzz && !r.debug_buzzer);
+    init(UINT32_MAX-30);a[0]=1;debug(14,a,UINT32_MAX-30);
+    tick(28,false);assert(f.buzz);tick(29,false);assert(!f.buzz);
+    init(0);a[0]=4;debug(14,a,0);cmd(0x12,1,0,1);
+    assert(r.update.active && !r.debug_buzzer && !f.buzz);
+    debug(14,a,2);assert(f.last[M1_LINK][4]==2);
+    init(0);cmd(0x0e,1,0,0);tick(0,false);a[0]=1;debug(14,a,1);
+    tick(61,false);assert(!r.debug_buzzer && f.buzz && f.pwm_hz==2000);
+    cmd(0x0e,0,0,62);tick(62,false);assert(!f.buzz);
+}
 static void debug_tests(void)
 {
     co2_tests();init(0);debug(0,0,0);assert(f.last[M1_LINK][4]==0 && f.last[M1_LINK][5]==2);
@@ -367,7 +438,7 @@ static void debug_stream_fuzz(void)
     for(unsigned i=0;i<12000;++i) {
         uint8_t p[12]={0x23,0x70,0,0,0,0,0,0,0,0,0,0x21};
         for(unsigned j=2;j<11;++j) { seed=seed*1664525u+1013904223u;p[j]=(uint8_t)(seed>>24); }
-        p[2]=(uint8_t)(i%10);bytes(M1_LINK,p,12,i);tick(i,false);
+        p[2]=(uint8_t)(i%15);bytes(M1_LINK,p,12,i);tick(i,false);
         assert(r.rx[M1_LINK].used<12 && r.rx[M1_PM].used<64);
     }
     m1_runtime_rx_error(&r,(m1_channel)-1);m1_runtime_rx(&r,(m1_channel)-1,0,0);
@@ -381,7 +452,7 @@ static void set_threshold(uint8_t code,uint16_t low,uint16_t high,uint32_t now)
 static void threshold_tests(void)
 {
     init(0);tick(0,false);debug(0,0,0);
-    assert(f.last[M1_LINK][6]==0x3f && f.last[M1_LINK][7]==0xff);
+    assert(f.last[M1_LINK][6]==0xff && f.last[M1_LINK][7]==0xff);
     debug(9,0,0);
     const uint8_t defaults[9]={0,100,1,44,0,75,0,150,3};
     assert(f.last[M1_LINK][4]==0 && !memcmp(f.last[M1_LINK]+5,defaults,sizeof(defaults)));
@@ -425,6 +496,28 @@ static void threshold_tests(void)
     /* RAM-only settings reset to defaults on an MCU reboot. */
     init(0);debug(9,0,0);assert(!memcmp(f.last[M1_LINK]+5,defaults,sizeof(defaults)));
 }
+/* Runtime integration: a stored tune owns PWM without blocking acquisition,
+ * and ordinary preset/stop/OTA paths reliably release that ownership. */
+static bool music_read(void *ctx,uint32_t at,uint8_t *p,size_t n)
+{ (void)ctx;(void)at;memset(p,255,n);return true; }
+static bool music_erase(void *ctx,uint32_t at){(void)ctx;(void)at;return true;}
+static bool music_write(void *ctx,uint32_t at,const uint8_t *p){(void)ctx;(void)at;(void)p;return true;}
+static void music_tests(void)
+{
+    init(0);r.io.flash=(m1_flash){0,music_read,music_erase,music_write};
+    const char song[]="Test:d=4,o=5,b=120:c,p,d";
+    memcpy(r.music.text,song,sizeof(song));r.music.length=sizeof(song)-1;r.music.present=true;
+    uint8_t play[7]={5,0,10};debug(15,play,0);assert(f.last[M1_LINK][4]==0);
+    tick(0,false);assert(f.buzz && f.pwm_hz==524 && r.music.playing);
+    unsigned requests=f.commands[M1_HCHO][1];tick(500,false);assert(!f.buzz && r.music.playing);
+    tick(1000,false);assert(f.buzz && f.pwm_hz==588 && f.commands[M1_HCHO][1]>requests);
+    tick(1500,false);assert(!r.music.playing && !f.buzz && f.pwm_hz==2000);
+    debug(15,play,2000);tick(2000,false);assert(r.music.playing);
+    uint8_t preset[7]={1};debug(14,preset,2001);assert(!r.music.playing && r.debug_buzzer);
+    debug(15,play,3000);tick(3000,false);cmd(0x12,1,0,3001);
+    assert(r.update.active && !r.music.playing && !r.debug_buzzer && !f.buzz);
+    debug(15,play,3002);assert(f.last[M1_LINK][4]==2);
+}
 static void arithmetic_fuzz(void)
 {
     uint32_t seed=20261024;
@@ -440,7 +533,7 @@ static void arithmetic_fuzz(void)
 }
 int main(void)
 {
-    clock_tests();button_tests();sensors();protocol();display();pm_modes();sensor_cadence();pm_cadence();climate_recovery();debug_tests();threshold_tests();debug_stream_fuzz();arithmetic_fuzz();
+    clock_tests();button_tests();sensors();protocol();display();pm_modes();sensor_cadence();pm_cadence();climate_recovery();colon_tests();tone_tests();music_tests();debug_tests();threshold_tests();debug_stream_fuzz();arithmetic_fuzz();
     puts("runtime: PM dual modes/SHT recovery/PA24/debug/protocol/button/clock/display/buzzer/wraparound PASS");
     puts("climate: 50000 bounded random conversions PASS");
 }

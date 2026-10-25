@@ -4,6 +4,7 @@
 #include "m1/core.h"
 #include "m1/climate.h"
 #include "m1/update.h"
+#include "m1/music.h"
 typedef enum { M1_LINK, M1_HCHO, M1_PM } m1_channel;
 typedef struct {
     void *context;
@@ -31,7 +32,10 @@ typedef struct {
     uint8_t display_ram[M1_DISPLAY_BYTES];
     m1_climate climate;
     m1_update update;
+    m1_music music;
+    bool music_applied;
     uint32_t second_at,display_at,display_send_at,climate_at,hcho_at,pm_at,reset_at;
+    uint32_t colon_at;
     uint32_t button_at,edge_at,buzzer_at,rx_errors,tx_errors,display_errors,rtc_errors;
     uint32_t display_retry,pm_probe_until,pm_probe_at,climate_reset_at;
     uint32_t debug_display_until,debug_buzzer_until;
@@ -46,6 +50,7 @@ typedef struct {
     bool debug_display,debug_raw,debug_buzzer;
     bool button_raw,button_down,button_3s,button_10s,pm_jump;
     bool display_ready,display_applied,dirty,reset_pending,low_hcho_seen;
+    bool colon_on;
     bool alarm_latched,buzzer_applied;
     uint16_t co2_ppm,co2_threshold[2],co2_interval;
     uint32_t co2_until,co2_phase_at;
@@ -57,6 +62,8 @@ void m1_runtime_pm_mode(m1_runtime *,uint8_t mode,uint32_t now);
 bool m1_debug_command(m1_runtime *,const uint8_t frame[12],uint8_t reply[20],uint32_t now);
 void m1_debug_poll(m1_runtime *,uint32_t now);
 void m1_co2_poll(m1_runtime *,uint32_t now);
+/* Compose the effective software display, including colon/CO2/debug overlays. */
+void m1_runtime_display_ram(const m1_runtime *,uint8_t ram[M1_DISPLAY_BYTES]);
 void m1_runtime_beep(m1_runtime *,m1_buzzer_mode,uint32_t now);
 void m1_runtime_init(m1_runtime *,const m1_io *,uint32_t now);
 void m1_runtime_rx(m1_runtime *,m1_channel,uint8_t byte,uint32_t now);

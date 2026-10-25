@@ -79,3 +79,5 @@ build/analysis-venv/bin/python tools/verify_thresholds_stock.py /path/to/your/m1
 原创实现与文档采用 [MIT](LICENSE)。允许复用的库已纳入：Microchip SAMD20 DFP 3.7.231 设备头文件、ARM CMSIS 5.9.0 Cortex-M0+ / GCC 头文件，均保留 Apache-2.0 许可证、固定版本和来源记录，见 [third_party](third_party)。没有包含原厂镜像或反编译源码。详见 [PROVENANCE.md](PROVENANCE.md)。
 
 联网模块固件位于 [phicomm-community-firmware](https://github.com/phicomm-io/phicomm-community-firmware)，与本仓库的主控镜像分别升级。
+
+主控 v0.9.3 增加四种提示音、每秒冒号闪烁及一首持久化 [RTTTL 音乐](docs/music.md)。WebUI 与闹钟能力由配套联网固件按版本和能力位开放。

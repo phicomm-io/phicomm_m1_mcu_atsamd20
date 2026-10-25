@@ -13,3 +13,9 @@ void *memcpy(void *destination, const void *source, size_t count)
     while (count--) *d++ = *s++;
     return destination;
 }
+int memcmp(const void *left,const void *right,size_t count)
+{
+    const unsigned char *a=left,*b=right;
+    while(count--){if(*a!=*b)return (int)*a-(int)*b;++a;++b;}
+    return 0;
+}

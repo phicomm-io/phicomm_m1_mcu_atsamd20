@@ -5,7 +5,7 @@ HAL_PYTHON ?= python3
 export VERSION_TAG
 HOST_FLAGS := -std=c11 -O2 -g -Wall -Wextra -Werror -Iinclude
 ARM_FLAGS := -std=gnu11 -Os -g -mcpu=cortex-m0plus -mthumb -ffreestanding -fno-builtin -ffunction-sections -fdata-sections -fno-unwind-tables -fno-asynchronous-unwind-tables -Wall -Wextra -Werror -Iinclude -Iplatform -Ithird_party/samd20/include -Ithird_party/cmsis/include
-SOURCES := src/core.c src/rtc.c src/display.c src/climate.c src/update.c src/runtime.c src/debug.c
+SOURCES := src/core.c src/rtc.c src/display.c src/climate.c src/update.c src/runtime.c src/debug.c src/music.c
 PLATFORM := platform/startup.c platform/memory.c platform/samd20.c
 VERSION_HEADER := include/m1/generated/build_version.h
 .PHONY: all version FORCE test sanitize link-check firmware bootloader ota hal-check clean
@@ -22,12 +22,17 @@ build/test_runtime: $(SOURCES) tests/test_runtime.c $(wildcard include/m1/*.h) $
 	$(HOST_CC) $(HOST_FLAGS) $(SOURCES) tests/test_runtime.c -o $@
 build/test_update: $(SOURCES) tests/test_update.c $(wildcard include/m1/*.h) $(VERSION_HEADER) | build
 	$(HOST_CC) $(HOST_FLAGS) $(SOURCES) tests/test_update.c -o $@
-test: build/test_core build/test_runtime build/test_update
+build/test_music: src/music.c src/update.c src/core.c tests/test_music.c $(VERSION_HEADER) | build
+	$(HOST_CC) $(HOST_FLAGS) src/music.c src/update.c src/core.c tests/test_music.c -o $@
+test: build/test_core build/test_runtime build/test_update build/test_music
 	./build/test_core
 	./build/test_runtime
 	./build/test_update
+	./build/test_music
 	python3 -m unittest discover -s tests -p 'test_*.py' -v
 sanitize: $(VERSION_HEADER) | build
+	$(HOST_CC) $(HOST_FLAGS) -fsanitize=address,undefined -fno-omit-frame-pointer src/music.c src/update.c src/core.c tests/test_music.c -o build/test_music_sanitize
+	./build/test_music_sanitize
 	$(HOST_CC) $(HOST_FLAGS) -fsanitize=address,undefined -fno-omit-frame-pointer $(SOURCES) tests/test_runtime.c -o build/test_runtime_sanitize
 	./build/test_runtime_sanitize
 	$(HOST_CC) $(HOST_FLAGS) -fsanitize=address,undefined -fno-omit-frame-pointer $(SOURCES) tests/test_update.c -o build/test_update_sanitize

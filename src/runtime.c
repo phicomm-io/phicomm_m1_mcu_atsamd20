@@ -43,6 +43,8 @@ void m1_runtime_init(m1_runtime *r,const m1_io *io,uint32_t now)
     if(!m1_clock_valid(&r->state.clock)) r->state.clock=(m1_clock){2000,1,1,0,0,0};
     r->second_at=now+1000; r->display_at=r->climate_at=r->hcho_at=r->pm_at=now;
     r->display_send_at=now+2200;
+    r->colon_at=now+500; r->colon_on=true;
+    m1_music_load(&r->music,&r->io.flash);
     r->display_retry=now; r->brightness_applied=255; r->dirty=true;
     for(unsigned i=0;i<3;++i) r->health[i].last_good=now;
     r->pm_mode=3; r->pm_auto=r->pm_armed=true; r->climate_reset_at=r->pm_probe_at=now;
@@ -61,6 +63,7 @@ static void command(m1_runtime *r,const uint8_t *p,size_t n,uint32_t now)
     }
     if(p[1]==0x12) {
         if(m1_update_begin(&r->update,p[2],p[3],now)) {
+            r->music.uploading=false;
             uint8_t leave[12]={0x23,0x70,5,0,0,0,0,0,0,0,0,0x21};
             (void)m1_debug_command(r,leave,reply,now); event(r,0x14);
         }
@@ -97,6 +100,7 @@ static void command(m1_runtime *r,const uint8_t *p,size_t n,uint32_t now)
         }
         if(p[1]==3) {
             r->second_at=now+1000;
+            r->colon_at=now+500; r->colon_on=true;
             if(!r->io.rtc_write(r->io.context,&r->state.clock)) r->rtc_errors++;
         }
         if(p[1]==0x0e) { r->buzzer_mode=r->state.buzzer_on?1:0; r->buzzer_at=now; }
@@ -279,10 +283,37 @@ static void render(m1_runtime *r,uint32_t now)
     } else { r->state.sample.hcho=r->state.hcho_raw; r->low_hcho_seen=true; }
     m1_display_render(&r->state,r->display_ram);
 }
+void m1_runtime_display_ram(const m1_runtime *r,uint8_t ram[M1_DISPLAY_BYTES])
+{
+    const m1_state *shown=r->debug_display?&r->debug_state:&r->state;
+    if(r->debug_display && r->debug_raw) {
+        for(unsigned i=0;i<M1_DISPLAY_BYTES;++i) ram[i]=r->debug_ram[i];
+        return; /* Raw diagnostics must remain literal. */
+    }
+    if(r->debug_display) m1_display_render(shown,ram);
+    else for(unsigned i=0;i<M1_DISPLAY_BYTES;++i)
+        ram[i]=shown->display_test?0xff:r->display_ram[i];
+    if(shown->display_test) return;
+    /* Both colon dots share bit 3 with neither digit's seven segments. */
+    ram[0]=(uint8_t)((ram[0]&~8u)|(r->colon_on?8u:0));
+    ram[3]=(uint8_t)((ram[3]&~8u)|(r->colon_on?8u:0));
+    if(r->co2_show && !r->debug_display)
+        m1_display_co2(ram,r->co2_slot,r->co2_ppm,r->co2_threshold);
+}
 static void display(m1_runtime *r,uint32_t now)
 {
     m1_co2_poll(r,now);
     render(r,now);
+    if(due(now,r->colon_at)) {
+        uint32_t phases=(now-r->colon_at)/500+1;
+        r->colon_at+=phases*500;
+        if(phases&1) {
+            r->colon_on=!r->colon_on;
+            const m1_state *shown=r->debug_display?&r->debug_state:&r->state;
+            if(shown->display_on && shown->brightness && !shown->display_test &&
+               !(r->debug_display && r->debug_raw)) r->dirty=true;
+        }
+    }
     if(!due(now,r->display_retry) || (!r->dirty && !due(now,r->display_send_at))) return;
     const uint8_t init[]={0x80,0xa0,0x9a,0x81,0x83,0xbf,0x88};
     if(!r->display_ready) {
@@ -302,13 +333,7 @@ static void display(m1_runtime *r,uint32_t now)
         r->display_applied=on; r->brightness_applied=shown->brightness;
     }
     uint8_t packet[30]={0};
-    if(r->debug_display && r->debug_raw) {
-        for(unsigned i=0;i<M1_DISPLAY_BYTES;++i) packet[i+1]=r->debug_ram[i];
-    } else if(r->debug_display) m1_display_render(shown,packet+1);
-    else for(unsigned i=0;i<M1_DISPLAY_BYTES;++i)
-        packet[i+1]=r->state.display_test?0xff:r->display_ram[i];
-    if(r->co2_show && !r->debug_display && !r->state.display_test)
-        m1_display_co2(packet+1,r->co2_slot,r->co2_ppm,r->co2_threshold);
+    m1_runtime_display_ram(r,packet+1);
     if(!r->io.i2c(r->io.context,0,0x72,packet,30,0,0)) goto failed;
     r->dirty=false;
     /* Stock 100-tick callback tests counter >20 before resetting to zero,
@@ -351,6 +376,19 @@ void m1_runtime_beep(m1_runtime *r,m1_buzzer_mode mode,uint32_t now)
 }
 static void buzzer(m1_runtime *r,uint32_t now)
 {
+    if(r->music.playing || r->music_applied) {
+        uint16_t hz=0;unsigned action=m1_music_tick(&r->music,now,&hz);
+        if(action) {
+            r->music_applied=true;
+            if(action==2) {
+                if(hz && !r->io.buzzer_pwm(r->io.context,hz,50))m1_music_stop(&r->music);
+                else { r->io.buzzer(r->io.context,hz!=0);return; }
+            } else return;
+        }
+        r->music_applied=false;
+        if(r->io.buzzer_pwm)(void)r->io.buzzer_pwm(r->io.context,2000,50);
+        r->io.buzzer(r->io.context,false);r->buzzer_applied=false;
+    }
     if(r->debug_buzzer) return;
     bool alarm=(r->state.sample.hcho_health &&
                 m1_threshold_group(r->state.hcho_raw,r->state.hcho_threshold)==M1_GROUP_RED)||
@@ -378,6 +416,7 @@ void m1_runtime_poll(m1_runtime *r,uint32_t now,bool pressed)
     }
     if(r->reset_phase) return;
     m1_debug_poll(r,now);
+    if(r->music.uploading && (uint32_t)(now-r->music.upload_at)>=30000)r->music.uploading=false;
     if(due(now,r->second_at)) {
         /* Bound catch-up after long stalls; deadlines use modulo-32 arithmetic. */
         unsigned n=(now-r->second_at)/1000+1;
