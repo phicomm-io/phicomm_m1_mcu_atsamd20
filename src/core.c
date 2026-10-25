@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "m1/core.h"
 
 static void zero(uint8_t *p, size_t n) { while (n--) *p++ = 0; }

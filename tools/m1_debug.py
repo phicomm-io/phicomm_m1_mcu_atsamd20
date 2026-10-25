@@ -20,7 +20,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--seq', type=int, default=1)
     sub = parser.add_subparsers(dest='command', required=True)
-    for name in ('caps', 'status', 'exit', 'thresholds'):
+    for name in ('caps', 'status', 'exit', 'thresholds', 'alarms'):
         sub.add_parser(name)
     p = sub.add_parser('tone')
     p.add_argument('name', choices=('off', 'tap', 'confirm', 'notice', 'error'))
@@ -41,9 +41,11 @@ def main():
     p = sub.add_parser('threshold')
     p.add_argument('sensor', choices=('hcho', 'pm25'))
     p.add_argument('low', type=int); p.add_argument('high', type=int)
+    p = sub.add_parser('alarm-mask', help='0=off; bits 0 HCHO, 1 PM2.5, 2 legacy CO2')
+    p.add_argument('mask', type=int, choices=range(8))
     a = parser.parse_args()
     payload = b''
-    operations = dict(caps=0, pwm=1, sample=2, display=3, raw=4, exit=5, status=6, **{'pm-mode': 7}, read=8, thresholds=9, tone=14)
+    operations = dict(caps=0, pwm=1, sample=2, display=3, raw=4, exit=5, status=6, **{'pm-mode': 7, 'alarm-mask': 20}, read=8, thresholds=9, tone=14, alarms=20)
     try:
         if a.command == 'threshold':
             print(encode_threshold(a.sensor, a.low, a.high).hex(' '))
@@ -73,6 +75,8 @@ def main():
             payload = bytes((a.offset, a.count))
         elif a.command == 'pm-mode':
             payload = bytes((a.mode,))
+        elif a.command == 'alarm-mask':
+            payload = bytes((1, a.mask))
         print(encode(operations[a.command], a.seq, payload).hex(' '))
     except (ValueError, struct.error) as error:
         parser.error(str(error))

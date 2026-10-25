@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "m1/update.h"
 static uint16_t be16(const uint8_t *p) { return (uint16_t)((uint16_t)p[0]<<8|p[1]); }
 static uint32_t le32(const uint8_t *p)

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT
+/* SPDX-License-Identifier: GPL-3.0-or-later
  * SAM D20, deliberately not the superficially similar SAM D21 register map. */
 #include "samd20g18.h"
 #include "samd20.h"

@@ -29,3 +29,18 @@ class ThresholdToolTests(unittest.TestCase):
                 result = self.invoke('threshold', 'hcho', low, high)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual(result.stdout, '')
+
+    def test_optional_buzzer_configuration_frames(self):
+        for arguments, expected in [
+            (('alarms',), '23 70 14 01 00 00 00 00 00 00 00 21'),
+            (('alarm-mask', '0'), '23 70 14 01 01 00 00 00 00 00 00 21'),
+            (('--seq', '255', 'alarm-mask', '3'), '23 70 14 ff 01 03 00 00 00 00 00 21'),
+        ]:
+            with self.subTest(arguments=arguments):
+                result = self.invoke(*arguments)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip(), expected)
+        for mask in ('-1', '8', 'true', '1.5'):
+            result = self.invoke('alarm-mask', mask)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(result.stdout, '')

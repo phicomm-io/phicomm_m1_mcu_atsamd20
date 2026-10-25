@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "m1/runtime.h"
 #include "m1/display.h"
 #include <assert.h>
@@ -57,12 +57,15 @@ static void bytes(m1_channel c,const uint8_t *p,size_t n,uint32_t now)
 { for(size_t i=0;i<n;++i) m1_runtime_rx(&r,c,p[i],now); }
 static void cmd(uint8_t code,uint8_t a,uint8_t b,uint32_t now)
 { uint8_t p[12]={0x23,code,a,b,0,0,0,0,0,0,0,0x21};bytes(M1_LINK,p,12,now); }
-static void pm_frame(uint16_t value,uint32_t now)
+static void pm_frame_error(uint16_t value,uint8_t error_code,uint32_t now)
 {
     uint8_t p[32]={0x42,0x4d,0,28};p[12]=(uint8_t)(value>>8);p[13]=(uint8_t)value;unsigned sum=0;
+    p[29]=error_code;
     for(unsigned i=0;i<30;++i) sum+=p[i];
     p[30]=(uint8_t)(sum>>8);p[31]=(uint8_t)sum;bytes(M1_PM,p,32,now);
 }
+static void pm_frame(uint16_t value,uint32_t now)
+{ pm_frame_error(value,0,now); }
 static void pm(uint16_t value,uint32_t now)
 {
     /* Isolated callback/filter cases explicitly arm a complete stock-sized
@@ -90,13 +93,29 @@ static void button_tests(void)
 {
     init(0);tick(0,false);tick(100,true);tick(110,false);tick(130,false);assert(r.state.display_on);
     tick(200,true);tick(220,true);tick(400,false);tick(420,false);
+    assert(r.state.display_on && !f.commands[M1_LINK][0x0f]);tick(771,false);
     assert(!r.state.display_on && f.commands[M1_LINK][0x0f]==1);
     tick(1000,true);tick(1020,true);tick(4010,true);tick(4011,true);
     assert(f.commands[M1_LINK][4]==1);tick(11000,true);tick(11001,true);
     assert(r.state.display_test && f.commands[M1_LINK][0x10]==1);
     tick(11100,false);tick(11120,false);assert(f.commands[M1_LINK][0x18]==1);
     init(UINT32_MAX-300);tick(UINT32_MAX-200,true);tick(UINT32_MAX-180,true);tick(100,false);tick(120,false);
+    tick(471,false);
     assert(!r.state.display_on && f.commands[M1_LINK][0x0f]==1);
+    init(0);tick(100,true);tick(120,true);tick(200,false);tick(220,false);
+    tick(300,true);tick(320,true);tick(400,false);tick(420,false);tick(800,false);
+    assert(r.state.display_on && !f.commands[M1_LINK][0x0f]);
+    assert(f.commands[M1_LINK][0x71]==1 && f.last[M1_LINK][2]==1 && f.last[M1_LINK][3]==2);
+    /* A short bounce cannot become a second click. */
+    init(0);tick(100,true);tick(120,true);tick(200,false);tick(220,false);
+    tick(250,true);tick(260,false);tick(280,false);tick(571,false);
+    assert(!r.state.display_on && f.commands[M1_LINK][0x0f]==1);
+    init(UINT32_MAX-500);tick(UINT32_MAX-400,true);tick(UINT32_MAX-380,true);
+    tick(UINT32_MAX-300,false);tick(UINT32_MAX-280,false);tick(UINT32_MAX-200,true);tick(UINT32_MAX-180,true);
+    tick(0,false);tick(20,false);assert(f.commands[M1_LINK][0x71]==1 && r.state.display_on);
+    /* OTA cancels a pending click and consumes physical transitions. */
+    init(0);tick(100,true);tick(120,true);tick(200,false);tick(220,false);
+    r.update.active=true;tick(600,false);assert(!f.commands[M1_LINK][0x0f]&&!r.button_click_pending);
 }
 static void sensors(void)
 {
@@ -108,7 +127,8 @@ static void sensors(void)
     hcho(0,40,false);tick(40,false);assert(r.state.sample.hcho==0);
     pm(30,50);assert(r.measured.pm25==0);pm(30,51);assert(r.measured.pm25==0);
     pm(30,52);assert(r.measured.pm25==30);pm(1200,53);assert(r.measured.pm25==30);
-    pm(1201,54);assert(r.measured.pm25==1201);pm(20,55);assert(r.measured.pm25==20);
+    pm(1201,54);assert(r.measured.pm25>=900 && r.measured.pm25<1201);
+    pm(20,55);assert(r.measured.pm25>=900); /* one dip cannot clear pollution */
     for(unsigned i=0;i<3;++i) hcho(42,100+i,true);
     tick(103,false);assert(r.state.sample.hcho_health==0 && f.commands[M1_LINK][10]==1);
     hcho(42,104,false);assert(r.state.sample.hcho_health==1);
@@ -132,6 +152,7 @@ static void protocol(void)
     cmd(2,25,0,103);tick(103,false);assert(!r.state.display_on && r.state.brightness==25);
     cmd(2,25,2,104);assert(r.state.display_on);cmd(2,26,1,105);assert(r.state.brightness==25 && f.commands[M1_LINK][7]==1);
     cmd(0x0e,1,0,106);tick(106,false);assert(f.buzz);cmd(0x0e,0,0,107);tick(107,false);assert(!f.buzz);
+    r.sensor_alarm_mask=1;
     hcho(301,108,false);tick(108,false);assert(f.buzz && r.buzzer_mode==3);
     tick(308,false);assert(!f.buzz);tick(708,false);assert(f.buzz);tick(6508,false);assert(!f.buzz);
     uint8_t time[12]={0x23,3,0x07,0xea,10,24,12,34,56,0,0,0x21};bytes(M1_LINK,time,12,7000);
@@ -166,13 +187,13 @@ static void pm_modes(void)
     assert(r.pm_mode==2 && !r.pm_probing);
     for(unsigned i=0;i<4;++i) { pm(30,3+i);assert(!r.measured.pm25); }
     pm(30,7);assert(r.measured.pm25==30);
-    pm(1200,8);assert(r.measured.pm25==1200); /* no mode-3 spike hold */
+    pm(1200,8);assert(r.measured.pm25==30); /* both modes reject isolated spikes */
     m1_runtime_pm_mode(&r,3,9);assert(!r.pm_auto && r.pm_warmup==0);
     pm(10,10);pm(10,11);pm(10,12);pm(1200,13);assert(r.measured.pm25==10);
     /* A false header followed by a real frame must retain the overlapping
      * candidate, even when received in several UART chunks. */
     uint8_t noise[11]={0x42,0x4d,0,28};r.pm_armed=true;bytes(M1_PM,noise,11,14);pm(1201,15);
-    assert(r.measured.pm25==1201);
+    assert(r.measured.pm25>=900 && r.measured.pm25<1201);
     m1_runtime_pm_mode(&r,0,16);tick(16,false);tick(1016,false);
     assert(!r.pm_probing && r.pm_mode==3);
     tick(10016,false);assert(r.pm_probing);
@@ -275,6 +296,51 @@ static void pm_cadence(void)
     const uint8_t prefix[8]={0x42,0x4d,0,28,0,0,1,0x74};
     bytes(M1_PM,prefix,8,1);assert(r.pm_mode==3 && r.rx[M1_PM].used==8);
 }
+static void pm_stability(void)
+{
+    const uint32_t origins[]={0,UINT32_MAX-5000};
+    for(unsigned m=2;m<=3;++m) for(unsigned o=0;o<2;++o) {
+        uint32_t at=origins[o];init(at);m1_runtime_pm_mode(&r,(uint8_t)m,at);
+        unsigned warm=m==2?4:2;
+        for(unsigned i=0;i<warm;++i) {
+            pm(40,at);assert(!r.measured.pm25 && !r.state.sample.pm25_health);at+=3000;
+        }
+        pm(40,at);assert(r.measured.pm25==40 && r.state.sample.pm25_health);at+=3000;
+        pm(180,at);assert(r.measured.pm25==40);
+        assert(r.sensor_frames[M1_SENSOR_PM].flags&M1_FRAME_FILTERED);
+        assert(r.sensor_frames[M1_SENSOR_PM].bytes[12]==0 && r.sensor_frames[M1_SENSOR_PM].bytes[13]==180);
+        at+=3000;pm(40,at);assert(r.measured.pm25==40);at+=3000;
+        pm(0,at);assert(r.measured.pm25==40);at+=3000;
+        pm(40,at);assert(r.measured.pm25==40);at+=3000;
+        pm(180,at);assert(r.measured.pm25==40);at+=3000;
+        pm(180,at);assert(r.measured.pm25>=140 && r.measured.pm25<180);at+=3000;
+        pm(180,at);assert(r.measured.pm25>=170 && r.measured.pm25<=180);
+        uint16_t last=r.measured.pm25;at+=3000;
+        /* A sensor error is visible in raw diagnostics, never as a zero
+         * measurement. Three errors fail health immediately. */
+        for(unsigned i=0;i<3;++i) {
+            r.pm_armed=true;pm_frame_error(7,1,at);
+            while(r.pm_armed)m1_runtime_rx(&r,M1_PM,0,at);
+            assert(r.measured.pm25==last);
+            assert(r.sensor_frames[M1_SENSOR_PM].flags&M1_FRAME_ERROR);at+=100;
+        }
+        assert(!r.state.sample.pm25_health && !r.pm_filter.seeded);
+        for(unsigned i=0;i<warm;++i) {
+            pm(8,at);assert(!r.measured.pm25 && !r.state.sample.pm25_health);at+=3000;
+        }
+        pm(8,at);assert(r.measured.pm25==8 && r.state.sample.pm25_health);at+=3000;
+        /* A transport error must not confirm two separated outliers. */
+        pm(300,at);assert(r.measured.pm25==8);at+=1000;
+        m1_runtime_rx_error(&r,M1_PM);at+=2000;
+        pm(300,at);assert(r.measured.pm25==8);at+=3000;
+        pm(300,at);assert(r.measured.pm25>200);at+=7000;
+        /* Recovery also works if UART data precedes poll after a long stall. */
+        pm(55,at);assert(!r.measured.pm25 && !r.state.sample.pm25_health);
+        at+=3000;
+        for(unsigned i=1;i<warm;++i) { pm(55,at);assert(!r.measured.pm25);at+=3000; }
+        pm(55,at);assert(r.measured.pm25==55 && r.state.sample.pm25_health);
+    }
+}
 static void climate_recovery(void)
 {
     init(0);f.status=0x8010;tick(0,false);tick(1,false);tick(21,false);tick(23,false);
@@ -336,6 +402,52 @@ static void co2_tests(void)
     init(UINT32_MAX-1000);cfg[0]=1;cfg[3]=2;debug(10,cfg,UINT32_MAX-900);
     value[2]=1;value[4]=2;debug(12,value,UINT32_MAX-900);
     tick(1000,false);assert(r.co2_show);tick(1100,false);assert(!r.co2_show);
+}
+static void external_display_tests(void)
+{
+    const uint32_t origins[]={0,UINT32_MAX-1000};
+    for(unsigned i=0;i<2;i++){
+        uint32_t now=origins[i];init(now);tick(now,false);
+        uint8_t value[7]={0,125,1,M1_GROUP_YELLOW,2,0,0},source[7]={1};
+        debug(0,0,now);assert(f.last[M1_LINK][16]==1);
+        m1_sample measured=r.measured,original=r.state.sample;
+        debug(17,value,now);tick(now,false);
+        assert(!r.external_source && !memcmp(f.screen,r.display_ram,29));
+        debug(18,source,now);tick(now,false);
+        assert(f.screen[10]==(0x05|8) && f.screen[9]==0xb3 && f.screen[4]==0xd6);
+        assert(!(f.screen[21]&0x30) && !(f.screen[4]&8));
+        assert((f.screen[18]&0x70)==0x70);
+        /* Only the selected numeric/legend/lamp fields change. */
+        for(unsigned j=0;j<29;j++){
+            if(j==4||j==9||j==10||j==12||j==18||j==19||j==21)continue;
+            assert(f.screen[j]==r.display_ram[j]);
+        }
+        assert(!memcmp(&measured,&r.measured,sizeof(measured)));
+        assert(!memcmp(&original,&r.state.sample,sizeof(original)));
+        debug(19,0,now+1);assert(f.last[M1_LINK][5]==1 && f.last[M1_LINK][6]==1 && f.last[M1_LINK][7]==1);
+        tick(now+2000,false);assert(!r.external_valid);
+        assert((f.screen[10]&~8u)==(r.display_ram[10]&~8u));
+        debug(19,0,now+2000);assert(!f.last[M1_LINK][7] && !f.last[M1_LINK][13]);
+        /* Renewing data resumes the selected source; no fake zero reading. */
+        debug(17,value,now+2100);tick(now+2100,false);assert(r.external_valid);
+        value[2]=4;value[3]=0;value[5]=1;debug(17,value,now+2101);tick(now+2101,false);
+        assert((f.screen[21]&0x85)==0x85 && (f.screen[22]&8));
+        assert(!(f.screen[12]&0x85) && !(f.screen[18]&0x85) && !(f.screen[19]&0x85));
+        /* Reject malformed requests without partially applying them. */
+        const m1_runtime before=r;
+        value[6]=1;debug(17,value,now+2102);assert(f.last[M1_LINK][4]==1);
+        assert(r.external_number==before.external_number && r.external_until==before.external_until);
+        value[6]=0;value[2]=3;debug(17,value,now+2102);assert(f.last[M1_LINK][4]==1);
+        value[2]=0;value[0]=4;debug(17,value,now+2102);assert(f.last[M1_LINK][4]==1);
+        value[0]=0;value[4]=61;debug(17,value,now+2102);assert(f.last[M1_LINK][4]==1);
+        source[1]=1;debug(18,source,now+2102);assert(f.last[M1_LINK][4]==1 && r.external_source==1);
+        source[0]=source[1]=0;debug(18,source,now+2103);tick(now+2103,false);
+        assert(!r.external_source && !memcmp(f.screen,r.display_ram,29));
+        value[4]=2;debug(17,value,now+2104);source[0]=1;debug(18,source,now+2104);
+        uint8_t overlay[7]={100,1,1,0,100};debug(3,overlay,now+2105);tick(now+2105,false);
+        for(unsigned j=0;j<29;j++)assert(f.screen[j]==255);
+        cmd(0x12,1,0,now+2106);debug(18,source,now+2107);assert(f.last[M1_LINK][4]==2);
+    }
 }
 static void colon_tests(void)
 {
@@ -452,7 +564,7 @@ static void set_threshold(uint8_t code,uint16_t low,uint16_t high,uint32_t now)
 }
 static void threshold_tests(void)
 {
-    init(0);tick(0,false);debug(0,0,0);
+    init(0);r.sensor_alarm_mask=3;tick(0,false);debug(0,0,0);
     assert(f.last[M1_LINK][6]==0xff && f.last[M1_LINK][7]==0xff);
     debug(9,0,0);
     const uint8_t defaults[9]={0,100,1,44,0,75,0,150,3};
@@ -496,6 +608,41 @@ static void threshold_tests(void)
     cmd(0x12,1,0,4515);debug(9,0,4516);assert(f.last[M1_LINK][4]==2);
     /* RAM-only settings reset to defaults on an MCU reboot. */
     init(0);debug(9,0,0);assert(!memcmp(f.last[M1_LINK]+5,defaults,sizeof(defaults)));
+}
+static void sensor_alarm_tests(void)
+{
+    init(0);tick(0,false);debug(0,0,0);assert(f.last[M1_LINK][17]==1);
+    hcho(500,1,false);r.measured.pm25=500;r.state.sample.pm25_health=1;
+    tick(1,false);assert(!f.buzz && !r.alarm_latched); /* opt in */
+    debug(20,0,2);assert(!f.last[M1_LINK][4] && f.last[M1_LINK][5]==1 && !f.last[M1_LINK][6]);
+    uint8_t a[7]={1,1};debug(20,a,3);tick(3,false);
+    assert(r.sensor_alarm_mask==1 && r.sensor_alarm_playing && f.buzz);
+    debug(20,0,4);assert(f.last[M1_LINK][6]==1 && f.last[M1_LINK][7]==1);
+    a[1]=0;debug(20,a,5);tick(5,false);assert(!f.buzz && !r.alarm_latched);
+    /* PM is independently enabled, even while HCHO is high. */
+    a[1]=2;debug(20,a,6);tick(6,false);assert(f.buzz && r.sensor_alarm_playing);
+    a[1]=0;debug(20,a,7);tick(7,false);assert(!f.buzz);
+    /* Optional threshold alarms cannot cancel manual or clock commands. */
+    cmd(0x0e,1,0,8);tick(8,false);assert(f.buzz && !r.sensor_alarm_playing);
+    a[1]=3;debug(20,a,9);tick(9,false);assert(f.buzz && r.buzzer_mode==1);
+    a[1]=0;debug(20,a,10);tick(10,false);assert(f.buzz && r.buzzer_mode==1);
+    cmd(0x0e,0,0,11);tick(11,false);assert(!f.buzz);
+    /* Invalid writes are atomic, and read requests must contain no mask. */
+    for(unsigned i=0;i<3;++i) {
+        uint8_t invalid[7]={1,3};
+        if(i==0)invalid[0]=2;
+        if(i==1)invalid[1]=8;
+        if(i==2)invalid[6]=1;
+        debug(20,invalid,12+i);assert(f.last[M1_LINK][4]==1 && !r.sensor_alarm_mask);
+    }
+    a[0]=0;a[1]=1;debug(20,a,16);assert(f.last[M1_LINK][4]==1);
+    /* A mask may change while a finite manual alarm is running. */
+    m1_runtime_beep(&r,M1_BUZZER_ALARM,17);a[0]=1;a[1]=3;
+    r.state.sample.hcho_health=r.state.sample.pm25_health=0;
+    debug(20,a,17);tick(17,false);assert(f.buzz && !r.sensor_alarm_playing);
+    a[1]=0;debug(20,a,18);tick(18,false);assert(f.buzz);
+    cmd(0x12,1,0,19);debug(20,0,20);assert(f.last[M1_LINK][4]==2);
+    init(0);assert(!r.sensor_alarm_mask); /* cold boot is always off */
 }
 /* Runtime integration: a stored tune owns PWM without blocking acquisition,
  * and ordinary preset/stop/OTA paths reliably release that ownership. */
@@ -580,7 +727,7 @@ static void arithmetic_fuzz(void)
 }
 int main(void)
 {
-    clock_tests();button_tests();sensors();sensor_frame_tests();protocol();display();pm_modes();sensor_cadence();pm_cadence();climate_recovery();colon_tests();tone_tests();music_tests();debug_tests();threshold_tests();debug_stream_fuzz();arithmetic_fuzz();
+    clock_tests();button_tests();sensors();sensor_frame_tests();protocol();display();pm_modes();sensor_cadence();pm_cadence();pm_stability();climate_recovery();colon_tests();tone_tests();music_tests();debug_tests();threshold_tests();sensor_alarm_tests();external_display_tests();debug_stream_fuzz();arithmetic_fuzz();
     puts("runtime: PM dual modes/SHT recovery/PA24/debug/protocol/button/clock/display/buzzer/wraparound PASS");
     puts("climate: 50000 bounded random conversions PASS");
 }

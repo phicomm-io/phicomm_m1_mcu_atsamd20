@@ -1,10 +1,11 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #ifndef M1_RUNTIME_H
 #define M1_RUNTIME_H
 #include "m1/core.h"
 #include "m1/climate.h"
 #include "m1/update.h"
 #include "m1/music.h"
+#include "m1/pm_filter.h"
 typedef enum { M1_LINK, M1_HCHO, M1_PM } m1_channel;
 typedef struct {
     void *context;
@@ -41,31 +42,40 @@ typedef struct {
     m1_sample measured;
     uint8_t display_ram[M1_DISPLAY_BYTES];
     m1_climate climate;
+    m1_pm_filter pm_filter;
     m1_update update;
     m1_music music;
     bool music_applied;
     uint32_t second_at,display_at,display_send_at,climate_at,hcho_at,pm_at,reset_at;
     uint32_t colon_at;
-    uint32_t button_at,edge_at,buzzer_at,rx_errors,tx_errors,display_errors,rtc_errors;
+    uint32_t button_at,edge_at,button_click_at,buzzer_at,rx_errors,tx_errors,display_errors,rtc_errors;
     uint32_t display_retry,pm_probe_until,pm_probe_at,climate_reset_at;
     uint32_t debug_display_until,debug_buzzer_until;
     m1_state debug_state;
     uint8_t debug_ram[M1_DISPLAY_BYTES];
     uint16_t climate_status,climate_resets;
-    uint16_t raw_t,raw_h,pm_previous;
+    uint16_t raw_t,raw_h;
     uint8_t hcho_probe,pm_warmup,climate_phase,buzzer_mode;
     uint8_t brightness_applied,pm_mode,reset_phase;
     uint8_t pm_probe_rx[8],pm_probe_used;
     bool pm_probing,pm_auto,pm_armed,climate_status_valid,climate_reset_due;
     bool debug_display,debug_raw,debug_buzzer;
-    bool button_raw,button_down,button_3s,button_10s,pm_jump;
+    bool button_raw,button_down,button_3s,button_10s,button_click_pending;
+    uint8_t button_sequence;
     bool display_ready,display_applied,dirty,reset_pending,low_hcho_seen;
     bool colon_on;
     bool alarm_latched,buzzer_applied;
+    uint8_t sensor_alarm_mask;
+    bool sensor_alarm_playing;
     uint16_t co2_ppm,co2_threshold[2],co2_interval;
     uint32_t co2_until,co2_phase_at;
     uint8_t co2_mode,co2_slot;
     bool co2_valid,co2_show;
+    /* Transport-neutral Wi-Fi display overlay. Original measurements stay intact. */
+    uint16_t external_number;
+    uint32_t external_until;
+    uint8_t external_format,external_color,external_slot,external_source;
+    bool external_valid;
 } m1_runtime;
 typedef enum { M1_BUZZER_OFF, M1_BUZZER_CONTINUOUS, M1_BUZZER_CHIRP, M1_BUZZER_ALARM } m1_buzzer_mode;
 void m1_runtime_pm_mode(m1_runtime *,uint8_t mode,uint32_t now);

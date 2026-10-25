@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #ifndef M1_UPDATE_H
 #define M1_UPDATE_H
 #include "m1/core.h"

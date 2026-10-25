@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "m1/runtime.h"
 #include "m1/display.h"
 static bool due(uint32_t now,uint32_t at) { return (int32_t)(now-at)>=0; }
@@ -32,6 +32,14 @@ static void bad(m1_runtime *r,unsigned sensor)
     if(h->bad==3 && !h->fault) {
         h->fault=true;
         if(sensor<2) error(r,sensor==0?10:11);
+    }
+}
+static void pm_bad(m1_runtime *r)
+{
+    bad(r,1);m1_pm_filter_interrupt(&r->pm_filter);
+    if(r->health[1].fault) {
+        r->state.sample.pm25_health=0;r->pm_warmup=0;
+        m1_pm_filter_reset(&r->pm_filter);
     }
 }
 void m1_runtime_init(m1_runtime *r,const m1_io *io,uint32_t now)
@@ -103,7 +111,9 @@ static void command(m1_runtime *r,const uint8_t *p,size_t n,uint32_t now)
             r->colon_at=now+500; r->colon_on=true;
             if(!r->io.rtc_write(r->io.context,&r->state.clock)) r->rtc_errors++;
         }
-        if(p[1]==0x0e) { r->buzzer_mode=r->state.buzzer_on?1:0; r->buzzer_at=now; }
+        if(p[1]==0x0e) {
+            r->buzzer_mode=r->state.buzzer_on?1:0;r->buzzer_at=now;r->sensor_alarm_playing=false;
+        }
     }
 }
 /* Main-loop owned cache. Readers use generation checks to avoid joining
@@ -130,8 +140,10 @@ void m1_runtime_pm_mode(m1_runtime *r,uint8_t mode,uint32_t now)
 {
     if(mode!=0 && mode!=2 && mode!=3) return;
     r->pm_auto=mode==0; r->pm_probing=false; r->pm_probe_used=0;
-    r->pm_mode=mode?mode:3; r->pm_warmup=0; r->pm_jump=false;
-    r->pm_previous=0; r->rx[M1_PM].used=0; r->pm_at=r->pm_probe_at=now; r->pm_armed=true;
+    r->pm_mode=mode?mode:3; r->pm_warmup=0;
+    m1_pm_filter_reset(&r->pm_filter);
+    r->measured.pm25=0; r->state.sample.pm25_health=0;
+    r->rx[M1_PM].used=0; r->pm_at=r->pm_probe_at=now; r->pm_armed=true;
 }
 static bool pm_valid(const uint8_t *p)
 {
@@ -140,8 +152,8 @@ static bool pm_valid(const uint8_t *p)
 }
 static void sample_pm(m1_runtime *r,const uint8_t *p,uint32_t now,bool warming)
 {
-    /* Both stock branches carry the same 32-byte data frame. A valid sensor
-     * error frame publishes zero in stock, but must not claim healthy data. */
+    /* Both sensor modes use one filtered value per acquisition. The cached
+     * frame remains byte-for-byte raw, including an error or rejected spike. */
     uint8_t flags=M1_FRAME_CHECKED;
     if(p[29]) flags|=M1_FRAME_ERROR;
     if(warming) flags|=M1_FRAME_WARMING;
@@ -149,13 +161,21 @@ static void sample_pm(m1_runtime *r,const uint8_t *p,uint32_t now,bool warming)
     m1_pm_frame decoded;
     (void)m1_pm_decode(p,&decoded);
     uint16_t value=decoded.atmospheric[1];
-    if(p[29]) { bad(r,1); value=0; } else good(r,1,now);
-    if(warming) value=0;
-    else if(r->pm_mode==3 && r->pm_previous<=149 && value>=1001 && !r->pm_jump) {
-        r->sensor_frames[M1_SENSOR_PM].flags|=M1_FRAME_FILTERED;
-        r->pm_jump=true; return;
-    } else r->pm_jump=false;
-    r->pm_previous=value; r->measured.pm25=value;
+    if(p[29]) {
+        pm_bad(r);return;
+    }
+    if(r->health[1].seen && now-r->health[1].last_good>6000) {
+        m1_pm_filter_reset(&r->pm_filter);warming=true;r->pm_warmup=1;
+        r->sensor_frames[M1_SENSOR_PM].flags|=M1_FRAME_WARMING;
+    }
+    good(r,1,now);
+    if(warming) {
+        m1_pm_filter_reset(&r->pm_filter);r->measured.pm25=0;
+        r->state.sample.pm25_health=0;return;
+    }
+    bool rejected;
+    r->measured.pm25=m1_pm_filter_add(&r->pm_filter,value,&rejected);
+    if(rejected) r->sensor_frames[M1_SENSOR_PM].flags|=M1_FRAME_FILTERED;
 }
 static void pm_rx(m1_runtime *r,uint8_t byte,uint32_t now)
 {
@@ -171,7 +191,10 @@ static void pm_rx(m1_runtime *r,uint8_t byte,uint32_t now)
         if(r->pm_probe_used==8 && p[0]==0x42 && p[1]==0x4d &&
            (p[2]!=0 || p[3]!=28) && p[6]==1 && p[7]==0x74) {
             capture(r,M1_SENSOR_PM_PROBE,p,8,0,now);
-            if(r->pm_mode!=2) { r->pm_mode=2; r->pm_warmup=0; r->pm_jump=false; r->pm_previous=0; }
+            if(r->pm_mode!=2) {
+                r->pm_mode=2;r->pm_warmup=0;m1_pm_filter_reset(&r->pm_filter);
+                r->measured.pm25=0;r->state.sample.pm25_health=0;
+            }
             r->pm_probing=false; r->rx[M1_PM].used=0; r->pm_armed=true; return;
         }
     }
@@ -184,19 +207,20 @@ static void pm_rx(m1_runtime *r,uint8_t byte,uint32_t now)
     bool warming=r->pm_warmup<(r->pm_mode==2?4:2);
     /* Stock mode 3 warms up by complete 64-byte callbacks, even if corrupt.
      * Mode 2 increments only after a checksum-valid 32-byte callback. */
-    if(r->pm_mode==3 && warming) { r->pm_warmup++; r->measured.pm25=r->pm_previous=0; }
+    if(r->pm_mode==3 && warming) { r->pm_warmup++; r->measured.pm25=0; }
     for(unsigned offset=0;offset<(r->pm_mode==2?1:32);++offset) {
         if(!pm_valid(s->bytes+offset)) continue;
         if(r->pm_mode==2 && warming) r->pm_warmup++;
         sample_pm(r,s->bytes+offset,now,warming); return;
     }
-    bad(r,1);
+    pm_bad(r);
 }
 void m1_runtime_rx_error(m1_runtime *r,m1_channel channel)
 {
     if((unsigned)channel>M1_PM) return;
     r->rx[channel].used=0; r->rx_errors++;
-    if(channel!=M1_LINK) bad(r,channel==M1_HCHO?0:1);
+    if(channel==M1_HCHO) bad(r,0);
+    if(channel==M1_PM) pm_bad(r);
 }
 void m1_runtime_rx(m1_runtime *r,m1_channel channel,uint8_t byte,uint32_t now)
 {
@@ -322,6 +346,9 @@ void m1_runtime_display_ram(const m1_runtime *r,uint8_t ram[M1_DISPLAY_BYTES])
     ram[3]=(uint8_t)((ram[3]&~8u)|(r->colon_on?8u:0));
     if(r->co2_show && !r->debug_display)
         m1_display_co2(ram,r->co2_slot,r->co2_ppm,r->co2_threshold);
+    if(r->external_source && r->external_valid && !r->debug_display)
+        m1_display_external(ram,r->external_slot,r->external_number,
+                            r->external_format,r->external_color);
 }
 static void display(m1_runtime *r,uint32_t now)
 {
@@ -367,8 +394,27 @@ static void display(m1_runtime *r,uint32_t now)
 failed:
     r->display_errors++; r->display_ready=false; r->dirty=true; r->display_retry=now+1000;
 }
+static void button_event(m1_runtime *r,uint8_t kind,uint32_t held)
+{
+    uint8_t reply[20];m1_event(0x71,reply);
+    reply[2]=1;reply[3]=kind;reply[4]=++r->button_sequence;
+    if(held>65535)held=65535;
+    reply[5]=(uint8_t)(held>>8);reply[6]=(uint8_t)held;
+    (void)send(r,M1_LINK,reply,sizeof(reply));
+}
+static void button_single(m1_runtime *r)
+{
+    uint8_t reply[20];r->button_click_pending=false;
+    button_event(r,1,0);r->state.display_test=false;
+    m1_button_short(&r->state,reply);(void)send(r,M1_LINK,reply,sizeof(reply));r->dirty=true;
+}
 static void button(m1_runtime *r,uint32_t now,bool pressed)
 {
+    if(r->update.active || r->reset_pending){
+        r->button_click_pending=false;r->button_down=r->button_raw=pressed;
+        r->button_at=r->edge_at=now;r->button_3s=r->button_10s=false;return;
+    }
+    if(r->button_click_pending && (uint32_t)(now-r->button_click_at)>350)button_single(r);
     if(pressed!=r->button_raw) { r->button_raw=pressed; r->edge_at=now; }
     if(now-r->edge_at<20) return;
     if(pressed!=r->button_down) {
@@ -376,18 +422,17 @@ static void button(m1_runtime *r,uint32_t now,bool pressed)
         if(pressed) { r->button_at=r->edge_at; r->button_3s=r->button_10s=false; }
         else {
             uint32_t held=r->edge_at-r->button_at;
-            uint8_t reply[20];
             if(held>=60 && held<3000) {
-                r->state.display_test=false; m1_button_short(&r->state,reply);
-                (void)send(r,M1_LINK,reply,20); r->dirty=true;
+                if(r->button_click_pending){r->button_click_pending=false;button_event(r,2,held);}
+                else {r->button_click_pending=true;r->button_click_at=now;}
             } else if(held>=9000) event(r,0x18);
         }
     }
     if(r->button_down) {
         uint32_t held=now-r->button_at;
-        if(held>=3010 && !r->button_3s) { r->button_3s=true; event(r,4); }
+        if(held>=3010 && !r->button_3s) { r->button_3s=true;button_event(r,3,held);event(r,4); }
         if(held>=10000 && !r->button_10s) {
-            r->button_10s=true; r->state.display_test=true; r->dirty=true; event(r,0x10);
+            r->button_10s=true; r->state.display_test=true; r->dirty=true;button_event(r,4,held);event(r,0x10);
         }
     }
 }
@@ -395,6 +440,7 @@ void m1_runtime_beep(m1_runtime *r,m1_buzzer_mode mode,uint32_t now)
 {
     if(mode>M1_BUZZER_ALARM) return;
     r->buzzer_mode=(uint8_t)mode; r->buzzer_at=now;
+    r->sensor_alarm_playing=false;
     r->state.buzzer_on=mode==M1_BUZZER_CONTINUOUS;
 }
 static void buzzer(m1_runtime *r,uint32_t now)
@@ -413,18 +459,21 @@ static void buzzer(m1_runtime *r,uint32_t now)
         r->io.buzzer(r->io.context,false);r->buzzer_applied=false;
     }
     if(r->debug_buzzer) return;
-    bool alarm=(r->state.sample.hcho_health &&
+    bool alarm=((r->sensor_alarm_mask&1) && r->state.sample.hcho_health &&
                 m1_threshold_group(r->state.hcho_raw,r->state.hcho_threshold)==M1_GROUP_RED)||
-        (r->state.sample.pm25_health &&
+        ((r->sensor_alarm_mask&2) && r->state.sample.pm25_health &&
          m1_threshold_group(r->measured.pm25,r->state.pm25_threshold)==M1_GROUP_RED)||
-        (r->co2_mode && r->co2_valid && m1_threshold_group(r->co2_ppm,r->co2_threshold)==M1_GROUP_RED);
-    if(alarm && !r->alarm_latched && r->buzzer_mode!=1) { r->buzzer_mode=3; r->buzzer_at=now; }
+        ((r->sensor_alarm_mask&4) && r->co2_mode && r->co2_valid &&
+         m1_threshold_group(r->co2_ppm,r->co2_threshold)==M1_GROUP_RED);
+    if(alarm && !r->alarm_latched && r->buzzer_mode!=1) {
+        r->buzzer_mode=3;r->buzzer_at=now;r->sensor_alarm_playing=true;
+    }
     r->alarm_latched=alarm;
     uint32_t elapsed=now-r->buzzer_at;
     bool on=r->buzzer_mode==1;
     if(r->buzzer_mode==2) { on=elapsed<200; if(!on) r->buzzer_mode=0; }
     if(r->buzzer_mode==3) {
-        if(elapsed>=6400) r->buzzer_mode=0;
+        if(elapsed>=6400) { r->buzzer_mode=0;r->sensor_alarm_playing=false; }
         else { uint32_t t=elapsed%800; on=t<200 || t>=600; }
     }
     if(on!=r->buzzer_applied) { r->io.buzzer(r->io.context,on); r->buzzer_applied=on; }
@@ -466,7 +515,7 @@ void m1_runtime_poll(m1_runtime *r,uint32_t now,bool pressed)
         r->pm_armed=true;
         if(r->pm_mode==2) (void)send(r,M1_PM,pm_probe,7);
         r->pm_at+=((now-r->pm_at)/3000+1)*3000;
-        if(r->health[1].fault) r->pm_warmup=0;
+        if(r->health[1].fault) { r->pm_warmup=0;m1_pm_filter_reset(&r->pm_filter); }
         if(r->health[0].fault) r->hcho_probe=0;
     }
     if(r->pm_auto && r->pm_mode==3 && due(now,r->pm_probe_at)) {
@@ -480,7 +529,10 @@ void m1_runtime_poll(m1_runtime *r,uint32_t now,bool pressed)
         if(now-h->last_good>6000 && !h->fault) {
             h->fault=true; h->timeouts++;
             if(i==0) { r->state.sample.hcho_health=0; r->hcho_probe=0; error(r,8); }
-            if(i==1) { r->state.sample.pm25_health=0; r->pm_warmup=0; r->rx[M1_PM].used=0; error(r,9); }
+            if(i==1) {
+                r->state.sample.pm25_health=0;r->pm_warmup=0;
+                m1_pm_filter_reset(&r->pm_filter);r->rx[M1_PM].used=0;error(r,9);
+            }
             if(i==2) { r->state.sample.climate_health=0; r->climate_reset_due=true; }
         }
         /* Invalid frames must clear health as well as stale samples. */
