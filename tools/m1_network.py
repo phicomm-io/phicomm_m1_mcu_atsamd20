@@ -89,6 +89,8 @@ def flash(device, device_id, data, expected_version):
     current = device.command('mcu.version.get')
     if not current.get('version_received') or current.get('updating'):
         raise RuntimeError('MCU version unavailable or upgrade already active')
+    same_version = current.get('version') == expected_version
+    started_at = time.monotonic()
     print('Target:', device_id, 'Wi-Fi:', before['version'], 'MCU:', current['version'], flush=True)
     packets = list(frames(data))
     started = committed = False
@@ -127,7 +129,13 @@ def flash(device, device_id, data, expected_version):
         try:
             device.identify(device_id)
             current = device.command('mcu.version.get')
-            if current.get('version_received') and current.get('version') == expected_version:
+            # A same-version upload must not pass on the pre-upgrade cache,
+            # including after the Wi-Fi upgrade-state timeout clears.
+            age = current.get('version_age_ms')
+            fresh = not same_version or (isinstance(age, (int, float)) and
+                    not isinstance(age, bool) and 0 <= age < (time.monotonic() - started_at) * 1000)
+            if (current.get('version_received') and not current.get('updating') and
+                    current.get('version') == expected_version and fresh):
                 print('Verified MCU runtime:', json.dumps(current), flush=True)
                 return current
         except (OSError, RuntimeError, ValueError, http.client.HTTPException):

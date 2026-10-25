@@ -53,6 +53,30 @@ class NetworkToolTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             net.validate_ack(fake.sent[1], broken)
 
+    def test_same_version_waits_for_fresh_runtime(self):
+        class Fake:
+            def __init__(self):
+                self.polls = 0
+            def identify(self, identity):
+                return dict(uart_ready=True, version='wifi')
+            def command(self, action):
+                self.polls += 1
+                # Preflight, still upgrading, timed-out stale cache, reboot.
+                return dict(version_received=True, version='same',
+                            updating=self.polls == 2,
+                            version_age_ms=100000 if self.polls < 4 else 0)
+            def exchange(self, frame):
+                if frame[1] == 0x12:
+                    return bytes((0x23, 0x14)) + bytes(17) + b'\x21'
+                if frame[1] == 0x13:
+                    return b'\x23\x14' + frame[2:4] + b'\x01' + bytes(14) + b'\x21'
+                return b'\x23\x16' + bytes(17) + b'\x21'
+        fake = Fake()
+        data = struct.pack('<II', 0x20008000, 0x4041) + bytes(256)
+        with patch.object(net.time, 'sleep'):
+            net.flash(fake, 'aabbccddeeff', data, 'same')
+        self.assertEqual(fake.polls, 4)
+
 
 if __name__ == '__main__':
     unittest.main()
