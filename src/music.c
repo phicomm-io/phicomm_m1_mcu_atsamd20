@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "m1/music.h"
 #include "m1/memory.h"
 _Static_assert(M1_MUSIC_ADDRESS >= M1_STAGING_ADDRESS+0x10100u,"music overlaps OTA staging");

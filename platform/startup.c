@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #include <stdint.h>
 extern uint32_t _stack_top, _data_start, _data_end, _data_load, _bss_start, _bss_end;
 extern int main(void);

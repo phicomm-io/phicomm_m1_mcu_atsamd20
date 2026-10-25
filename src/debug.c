@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "m1/runtime.h"
 #include "m1/display.h"
 #define LEASE_MS 10000u
@@ -26,6 +26,9 @@ static uint8_t start_buzzer(m1_runtime *r,uint16_t hz,uint8_t duty,uint16_t ms,u
 }
 void m1_debug_poll(m1_runtime *r,uint32_t now)
 {
+    if(r->external_valid && due(now,r->external_until)){
+        r->external_valid=false;r->dirty=true;
+    }
     if(r->debug_display && due(now,r->debug_display_until)) {
         r->debug_display=r->debug_raw=false; r->dirty=true;
     }
@@ -61,6 +64,9 @@ bool m1_debug_command(m1_runtime *r,const uint8_t p[12],uint8_t out[20],uint32_t
         out[5]=2; put16(out+6,0xffff); put16(out+8,LEASE_MS);
         out[10]=r->io.buzzer_pwm!=0;
         out[11]=1; out[12]=M1_SENSOR_COUNT; out[13]=9; /* sensor-read schema/count/chunk */
+        out[14]=1; out[15]=0x0f; /* button event schema and supported kinds */
+        out[16]=1; /* generic Wi-Fi display schema; operations 0x11..0x13 */
+        out[17]=1; /* optional sensor buzzer alarm schema; operation 0x14 */
         break;
     case 1: {
         uint16_t hz=be16(a),ms=be16(a+3);
@@ -122,6 +128,7 @@ bool m1_debug_command(m1_runtime *r,const uint8_t p[12],uint8_t out[20],uint32_t
     case 10: {
         uint16_t seconds=be16(a+2);
         if(a[0]>2 || a[1]>1 || !seconds || seconds>3600 || !zero(a+4,3))goto invalid;
+        r->external_source=0; /* Legacy client explicitly takes display ownership. */
         if(r->co2_mode!=a[0] || r->co2_slot!=a[1] || r->co2_interval!=seconds)r->co2_phase_at=now;
         r->co2_mode=a[0];r->co2_slot=a[1];r->co2_interval=seconds;r->dirty=true;
         m1_co2_poll(r,now);break;
@@ -196,6 +203,39 @@ bool m1_debug_command(m1_runtime *r,const uint8_t p[12],uint8_t out[20],uint32_t
         for(unsigned i=0;i<a[3];++i)out[10+i]=f->bytes[a[2]+i];
         break;
     }
+    case 17: {
+        /* Number, decimal/unit bits, color, TTL seconds, slot, reserved. */
+        uint16_t number=be16(a);
+        if(number>999 || (a[2]&~7u) || (a[2]&3)==3 || a[3]>3 ||
+           a[4]>60 || a[5]>1 || a[6])goto invalid;
+        r->external_number=number;r->external_format=a[2];r->external_color=a[3];
+        r->external_slot=a[5];r->external_valid=a[4]!=0;
+        r->external_until=now+(uint32_t)a[4]*1000;r->dirty=true;
+        r->co2_mode=0;m1_co2_poll(r,now);break;
+    }
+    case 18:
+        if(a[0]>1 || !zero(a+1,6))goto invalid;
+        r->external_source=a[0];r->co2_mode=0;r->dirty=true;
+        m1_co2_poll(r,now);break;
+    case 19: {
+        if(!zero(a,7))goto invalid;
+        bool valid=r->external_valid && !due(now,r->external_until);
+        out[5]=1;out[6]=r->external_source;out[7]=r->external_source && valid;
+        out[8]=r->external_slot;put16(out+9,r->external_number);
+        out[11]=r->external_format;out[12]=r->external_color;
+        out[13]=valid?(uint8_t)((r->external_until-now+999)/1000):0;
+        break;
+    }
+    case 20:
+        if(a[0]>1 || (a[1]&~7u) || !zero(a+2,5) || (!a[0] && a[1]))goto invalid;
+        if(a[0] && a[1]!=r->sensor_alarm_mask) {
+            r->sensor_alarm_mask=a[1];r->alarm_latched=false;
+            if(r->sensor_alarm_playing) {
+                r->buzzer_mode=0;r->sensor_alarm_playing=false;
+            }
+        }
+        out[5]=1;out[6]=r->sensor_alarm_mask;out[7]=r->alarm_latched;
+        break;
     default: out[4]=3; break;
     }
     return true;

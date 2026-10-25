@@ -28,17 +28,20 @@ def compare_assets(tag, directory, existing):
 def publish(tag, directory):
     verify_files(directory)
     metadata = json.loads((directory/'release.json').read_text())
-    if metadata['tag'] != tag or metadata['prerelease'] is not True:
+    stable = int(tag[1:].split('.')[0]) >= 1
+    if (metadata['tag'] != tag or metadata['prerelease'] is not (not stable) or
+            (stable and metadata.get('hardware_validation') != 'PASS')):
         raise ValueError('release identity/policy mismatch')
+    policy = ['--prerelease=false', '--latest=true'] if stable else ['--prerelease', '--latest=false']
     view = gh('release', 'view', tag, '--json', 'tagName,isDraft,isPrerelease,body,assets', check=False)
     if view.returncode:
-        gh('release', 'create', tag, '--verify-tag', '--draft', '--prerelease', '--latest=false',
-           '--title', f'{tag}（开发预览）', '--notes-file', directory/'notes.md',
+        gh('release', 'create', tag, '--verify-tag', '--draft', *policy,
+           '--title', tag if stable else f'{tag}（开发预览）', '--notes-file', directory/'notes.md',
            *[directory/name for name in sorted(ASSETS)])
     else:
         release = json.loads(view.stdout)
         if (release['tagName'] != tag or release['body'].strip() != (directory/'notes.md').read_text().strip() or
-                release['isPrerelease'] is not True):
+                release['isPrerelease'] is not (not stable)):
             raise ValueError('existing release notes or policy differ; refusing to overwrite')
         existing = {asset['name'] for asset in release['assets']}
         compare_assets(tag, directory, existing)
@@ -51,7 +54,7 @@ def publish(tag, directory):
             return  # Fully verified published release: idempotent no-op.
     # Read back every upload while the release is still a draft.
     compare_assets(tag, directory, ASSETS)
-    gh('release', 'edit', tag, '--draft=false', '--prerelease', '--latest=false')
+    gh('release', 'edit', tag, '--draft=false', *policy)
 
 
 if __name__ == '__main__':

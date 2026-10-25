@@ -1,0 +1,28 @@
+name: Bug report / 问题反馈
+description: Report a reproducible device, platform or website problem.
+body:
+  - type: input
+    id: versions
+    attributes:
+      label: Versions / 版本
+      description: Firmware, frontend/platform and M1 sensor MCU versions; include full commit when available.
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Model and hardware / 型号与硬件
+      description: Include variant and original M1 MCU family (11.x / 17.x / unknown), if relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps, expected and actual behavior / 步骤、预期与实际结果
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence / 证据
+      description: Redacted logs, transport, browser and upgrade path. Remove passwords, tokens and personal data.

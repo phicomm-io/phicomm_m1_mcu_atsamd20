@@ -1,7 +1,10 @@
 name: Firmware, OTA artifacts and recovery checks
 on:
   push:
+    branches: [main, dev, 'feature/**', 'hotfix/**']
+    tags: ['v*']
   pull_request:
+    branches: [main, dev]
   workflow_dispatch:
 permissions:
   contents: read
@@ -16,6 +19,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Check branch workflow
+        run: python3 tools/check_branch_policy.py
       - name: Resolve version from Git tag and commit
         id: version
         run: |
@@ -95,8 +100,14 @@ jobs:
           path: build/incoming/debug
       - name: Prepare frozen notes and verified release assets
         run: |
-          python3 tools/release/prepare.py "$TAG_NAME" "$GITHUB_SHA" --ota build/incoming/ota --debug build/incoming/debug --output build/release
+          acceptance=()
+          if [[ "$TAG_NAME" != v0.* ]]; then
+            git fetch origin main
+            git show "origin/main:docs/release/acceptance/$TAG_NAME.json" > build/hardware-acceptance.json
+            acceptance=(--acceptance build/hardware-acceptance.json)
+          fi
+          python3 tools/release/prepare.py "$TAG_NAME" "$GITHUB_SHA" --ota build/incoming/ota --debug build/incoming/debug --output build/release "${acceptance[@]}"
           cd build/release
           sha256sum -c SHA256SUMS
-      - name: Publish immutable development preview
+      - name: Publish immutable MCU release
         run: python3 tools/release/publish.py "$TAG_NAME" --directory build/release

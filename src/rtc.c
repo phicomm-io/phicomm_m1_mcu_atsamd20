@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "m1/core.h"
 static unsigned unbcd(uint8_t b) { return (b >> 4) * 10u + (b & 15u); }
 static uint8_t bcd(unsigned n) { return (uint8_t)((n / 10u) * 16u + n % 10u); }

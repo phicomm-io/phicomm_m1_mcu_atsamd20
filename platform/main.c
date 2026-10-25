@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "samd20.h"
 #include "samd20g18.h"
 static m1_runtime runtime;

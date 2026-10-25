@@ -47,7 +47,7 @@ def verify_files(directory):
         raise ValueError('incomplete release checksums')
 
 
-def prepare(tag, commit, ota, debug, log, output):
+def prepare(tag, commit, ota, debug, log, output, acceptance=None):
     body = extract(log, tag)
     if len(commit) != 40 or any(c not in '0123456789abcdef' for c in commit):
         raise ValueError('expected full source commit')
@@ -80,12 +80,23 @@ def prepare(tag, commit, ota, debug, log, output):
                 not report['status'].startswith('PASS') or report['gclk2_hz_nominal'] != 1024 or
                 report['wdt_seconds_nominal'] != 8):
             raise ValueError('ARM clock report mismatch')
+    stable = int(tag[1:].split('.')[0]) >= 1
+    if stable:
+        if not acceptance:
+            raise ValueError('stable MCU release requires matching hardware acceptance')
+        evidence = json.loads(Path(acceptance).read_text())
+        if (evidence.get('schema') != 1 or evidence.get('tag') != tag or
+                evidence.get('source_commit') != commit or evidence.get('hardware_validation') != 'PASS' or
+                evidence.get('app_sha256') != sha(data) or
+                evidence.get('boot_sha256') != sha((debug/'m1-boot.bin').read_bytes())):
+            raise ValueError('hardware acceptance does not match this release')
+        record['hardware_validation'] = 'PASS'
     if output.exists() and any(output.iterdir()):
         raise ValueError('release output must be empty')
     output.mkdir(parents=True, exist_ok=True)
     (output/'m1-mcu-ota.bin').write_bytes(data)
     # Published assets carry a release label; this never upgrades hardware proof.
-    record.update(release=True, prerelease=True)
+    record.update(release=True, prerelease=not stable)
     (output/'m1-mcu-ota.json').write_text(json.dumps(record, indent=2)+'\n')
     with zipfile.ZipFile(output/'m1-mcu-debug-recovery.zip', 'w') as archive:
         entries = {name: (debug/name).read_bytes() for name in DEBUG_FILES}
@@ -93,26 +104,28 @@ def prepare(tag, commit, ota, debug, log, output):
         entries['README.txt'] = ('ATSAMD20G18A SWD recovery/development files.\n'
                                 'm1-app.bin: application at 0x4000.\n'
                                 'm1-boot.bin: separate bootloader at 0x0; NOT an OTA payload.\n'
-                                'Hardware validation: NOT_RUN. Publishing does not flash a device.\n').encode()
+                                f'Hardware validation: {record["hardware_validation"]}.\n').encode()
+        if stable:
+            entries['hardware-acceptance.json'] = Path(acceptance).read_bytes()
         for name, contents in sorted(entries.items()):
             info = zipfile.ZipInfo(name, (1980, 1, 1, 0, 0, 0))
             info.external_attr = 0o100644 << 16
             archive.writestr(info, contents)
     notes = (f'# {tag}\n\n{body}\n'
-             f'### 构建信息\n\n版本：`{record["version"]}`；源码：`{commit}`。\n\n'
-             '本发布为开发预览；实机启动、传感器和升级恢复验收尚未完成。\n\n'
+             f'### 构建信息\n\n版本：`{record["version"]}`；源码：`{commit}`。\n\n' +
+             ('原厂 11.x 用户可优先使用；17.1.2.3 / 17.x 待镜像分析后再确认兼容性。\n\n' if stable else
+              '本发布为开发预览。\n\n') +
              '### 下载文件\n\n'
              '- `m1-mcu-ota.bin`：ATSAMD20G18A 主控应用，链接于 `0x4000`；不用于 Wi-Fi MCU 更新。\n'
              '- `m1-mcu-ota.json`：版本、来源、长度、SHA-256 及验证状态。\n'
              '- `m1-mcu-debug-recovery.zip`：独立 Boot、应用与 ELF/map，仅供开发和 SWD 恢复。\n'
              '- `SHA256SUMS`：下载后可运行 `sha256sum -c SHA256SUMS` 校验。\n\n'
-             '镜像无签名，SHA/CRC 不提供来源认证。`release=true` 表示发布包，'
-             '`hardware_validation=NOT_RUN` 表示仍无实机验收证据。\n')
+             '镜像无签名，SHA/CRC 不提供来源认证。请保留原厂备份和 SWD 恢复能力。\n')
     (output/'notes.md').write_text(notes)
     files = {p.name: dict(bytes=p.stat().st_size, sha256=sha(p.read_bytes()))
              for p in sorted(output.iterdir())}
     catalog = dict(schema=1, tag=tag, version=record['version'], source_commit=commit,
-                   target='ATSAMD20G18A', prerelease=True, hardware_validation=record['hardware_validation'],
+                   target='ATSAMD20G18A', prerelease=not stable, hardware_validation=record['hardware_validation'],
                    release_log_sha256=sha(log.encode()), assets=files)
     (output/'release.json').write_text(json.dumps(catalog, indent=2)+'\n')
     sums = ''.join(f'{sha(p.read_bytes())}  {p.name}\n' for p in sorted(output.iterdir()))
@@ -128,10 +141,11 @@ if __name__ == '__main__':
     parser.add_argument('--ota', type=Path, required=True)
     parser.add_argument('--debug', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--acceptance', type=Path)
     args = parser.parse_args()
     source = resolve_version(tag=args.tag)
     if source['git_commit'] != args.commit:
         parser.error('tag checkout does not match workflow commit')
     result = prepare(args.tag, args.commit, args.ota, args.debug,
-                     (ROOT/'docs/release/Release-Log.md').read_text(), args.output)
+                     (ROOT/'docs/release/Release-Log.md').read_text(), args.output, args.acceptance)
     print(json.dumps(result, indent=2))

@@ -3,6 +3,9 @@
 
 Executes original instructions only in Unicorn. RTOS, GPIO configuration, NVM
 and I2C helpers are stubs; no physical hardware is accessed.
+The v1 PM stability filter intentionally changes published concentrations.
+Compare stock output with its legacy model, and compare current raw acquisition
+and warm-up separately; never label filtered v1 output as stock-equivalent.
 """
 import argparse
 import ctypes as C
@@ -47,7 +50,7 @@ def pm_frame(value, error=0):
     return bytes(data)
 
 
-def pm_compare(blob):
+def pm_acquisition_compare(blob):
     wrapper = r'''
 #include "m1/runtime.h"
 static m1_runtime r;
@@ -60,8 +63,11 @@ unsigned feed(const uint8_t *p) {
     while(r.pm_armed) m1_runtime_rx(&r,M1_PM,0,1);
     return r.measured.pm25;
 }
+unsigned raw_value(void) {const uint8_t *p=r.sensor_frames[M1_SENSOR_PM].bytes;return (unsigned)p[12]*256+p[13];}
+unsigned flags(void) {return r.sensor_frames[M1_SENSOR_PM].flags;}
 '''
     cases = 0
+    differences = []
     with tempfile.TemporaryDirectory() as d:
         path = Path(d)
         (path / 'wrap.c').write_text(wrapper)
@@ -74,16 +80,35 @@ unsigned feed(const uint8_t *p) {
             uc = emulator(blob)
             uc.mem_write(0x200041c4, bytes((mode,)))
             lib.begin(mode)
+            previous, jump = 0, False
             # One aligned candidate in each mode-3 64-byte receive window.
-            for value, error in [(30, 0)] * 5 + [(1200, 0), (1201, 0), (20, 0), (1000, 0), (1001, 0), (9999, 0), (23, 1), (45, 0)]:
+            for index, (value, error) in enumerate([(30, 0)] * 5 + [(1200, 0), (1201, 0), (20, 0), (1000, 0), (1001, 0), (9999, 0), (23, 1), (45, 0)]):
                 frame = pm_frame(value, error)
                 uc.mem_write(0x20000308 if mode == 2 else 0x200002c8, frame + (bytes(32) if mode == 3 else b''))
                 run(uc, 0x78cc)
-                want = struct.unpack('<I', uc.mem_read(0x2000404c, 4))[0]
+                stock = struct.unpack('<I', uc.mem_read(0x2000404c, 4))[0]
+                warming = index < (4 if mode == 2 else 2)
+                expected = 0 if warming or error else value
+                if mode == 3 and not warming and previous <= 149 and expected >= 1001 and not jump:
+                    expected, jump = previous, True
+                else:
+                    jump = False
+                assert stock == expected, (mode, index, 'stock model', stock, expected)
+                previous = expected
                 got = lib.feed(frame)
-                assert got == want, (mode, cases, value, error, got, want)
+                assert lib.raw_value() == value, (mode, index, 'raw capture')
+                flags = lib.flags()
+                assert flags & 3 == 3 and bool(flags & 8) == warming
+                assert bool(flags & 4) == bool(error)
+                if warming:
+                    assert got == 0
+                if got != stock:
+                    differences.append(dict(mode=mode, index=index, raw=value,
+                                            error=error, stock=stock, filtered=got))
                 cases += 1
-    return cases
+    assert differences, 'v1 filter must exercise intentional stock differences'
+    return dict(stock_model_cases=cases, raw_capture_cases=cases,
+                intentional_value_differences=differences)
 
 
 def pa24(blob, start, cancel=0, complete=0):
@@ -158,10 +183,10 @@ def verify(blob):
         assert (['metadata_commit_stub'] in trace) == bool(complete)
         traces.append(trace)
     assert struct.unpack_from('<I', blob, 0x9274)[0] == 7999
-    return dict(status='PASS', stock_sha256=STOCK_SHA256, pm_comparison_cases=pm_compare(blob),
+    return dict(status='PASS', stock_sha256=STOCK_SHA256, pm_acquisition=pm_acquisition_compare(blob),
                 pa24_trace_cases=4, pa24_traces=traces, systick_reload=7999,
                 sht_status_path=status_command(blob),
-                limits='selected instructions; RTOS/GPIO configuration/NVM/I2C are stubs; no hardware proof; mode-3 comparison uses one candidate per 64-byte window')
+                limits='selected instructions; RTOS/GPIO configuration/NVM/I2C are stubs; no hardware proof; mode-3 uses one candidate per 64-byte window; v1 filtered PM concentrations intentionally differ from stock')
 
 
 if __name__ == '__main__':
