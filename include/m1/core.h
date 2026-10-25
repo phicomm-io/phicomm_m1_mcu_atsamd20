@@ -66,5 +66,13 @@ uint16_t m1_stock_crc_byte(uint16_t crc, uint8_t byte);
 uint8_t m1_sht_crc(const uint8_t *data, size_t count);
 bool m1_sht_raw(const uint8_t frame[6], uint16_t *temperature, uint16_t *humidity);
 bool m1_hcho_raw(const uint8_t frame[9], uint16_t *value);
+/* Standard Plantower-compatible 32-byte layout; actual module identity is
+ * unconfirmed. Error frames decode successfully but are not valid samples. */
+typedef struct {
+    uint16_t cf1[3], atmospheric[3]; /* PM1.0, PM2.5, PM10, ug/m3 */
+    uint16_t particles[6]; /* cumulative >0.3/0.5/1/2.5/5/10 um per 0.1 L */
+    uint8_t version, error;
+} m1_pm_frame;
+bool m1_pm_decode(const uint8_t frame[32], m1_pm_frame *decoded);
 bool m1_pm25_raw(const uint8_t frame[32], uint16_t *value);
 #endif

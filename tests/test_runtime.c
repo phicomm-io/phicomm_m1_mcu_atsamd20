@@ -8,7 +8,7 @@ typedef struct {
     unsigned commands[3][256],rtc_writes,resets,display_writes,buzz_changes;
     uint32_t display_times[64],now;
     uint8_t last[3][32],screen[29];size_t last_size[3];
-    bool bus_fail,tx_fail,rtc_ok,buzz,status_crc_bad,pwm_fail,wifi,reset_nack;
+    bool bus_fail,tx_fail,rtc_ok,buzz,status_crc_bad,pwm_fail,wifi,reset_nack,aux_crc_bad;
     uint16_t status,pwm_hz; uint8_t pwm_duty; unsigned status_reads,soft_resets,reset_attempts;
     m1_clock clock;
 } fake;
@@ -33,6 +33,7 @@ static bool i2c(void *ctx,unsigned bus,uint8_t addr,const uint8_t *tx,size_t nt,
         }
         assert(nr==6);rx[0]=0x66;rx[1]=0x66;rx[2]=m1_sht_crc(rx,2);
         rx[3]=0x80;rx[4]=0;rx[5]=m1_sht_crc(rx+3,2);
+        if(v->aux_crc_bad && r.climate_phase==2)rx[5]^=1;
     } else {
         assert(nt==2 && ((tx[0]==0x24 && tx[1]==0)||(tx[0]==0x36 && tx[1]==0x82)||
                (tx[0]==0xf3 && tx[1]==0x2d)||(tx[0]==0x30 && tx[1]==0xa2)));
@@ -518,6 +519,52 @@ static void music_tests(void)
     assert(r.update.active && !r.music.playing && !r.debug_buzzer && !f.buzz);
     debug(15,play,3002);assert(f.last[M1_LINK][4]==2);
 }
+static void sensor_frame_tests(void)
+{
+    init(UINT32_MAX-50);
+    uint8_t a[7]={M1_SENSOR_PM};debug(16,a,0);
+    assert(!f.last[M1_LINK][4] && !f.last[M1_LINK][6] && f.last[M1_LINK][9]==255);
+    debug(0,0,0);assert(f.last[M1_LINK][11]==1 && f.last[M1_LINK][12]==M1_SENSOR_COUNT);
+    hcho(513,UINT32_MAX-10,false);
+    const m1_sensor_frame *h=&r.sensor_frames[M1_SENSOR_HCHO];
+    assert(h->length==9 && h->generation==1 && h->bytes[2]==2 && h->bytes[3]==1);
+    uint8_t saved[9];memcpy(saved,h->bytes,9);hcho(514,1,true);
+    assert(h->generation==1 && !memcmp(saved,h->bytes,9));
+    a[0]=M1_SENSOR_HCHO;debug(16,a,5);
+    assert(!f.last[M1_LINK][4] && f.last[M1_LINK][6]==9 && f.last[M1_LINK][12]==16);
+    a[1]=1;a[3]=9;a[5]=1;debug(16,a,6);
+    assert(!f.last[M1_LINK][4] && !memcmp(f.last[M1_LINK]+10,saved,9));
+    a[2]=1;debug(16,a,6);assert(f.last[M1_LINK][4]==1);a[2]=0;
+    a[3]=10;debug(16,a,6);assert(f.last[M1_LINK][4]==1);a[3]=9;
+    hcho(515,7,false);debug(16,a,8);assert(f.last[M1_LINK][4]==5);
+    a[5]=2;a[6]=1;debug(16,a,8);assert(f.last[M1_LINK][4]==1);a[6]=0;
+    a[0]=M1_SENSOR_COUNT;debug(16,a,8);assert(f.last[M1_LINK][4]==1);
+    init(0);pm(10,1);
+    assert(r.sensor_frames[M1_SENSOR_PM].flags & M1_FRAME_WARMING);
+    pm(10,2);pm(10,3);pm(1200,4);
+    assert(r.sensor_frames[M1_SENSOR_PM].flags & M1_FRAME_FILTERED);
+    assert(r.sensor_frames[M1_SENSOR_PM].bytes[12]==4 && r.measured.pm25==10);
+    uint16_t gen=r.sensor_frames[M1_SENSOR_PM].generation;
+    uint8_t p[32]={0x42,0x4d,0,28};r.pm_armed=true;bytes(M1_PM,p,32,5);
+    while(r.pm_armed)m1_runtime_rx(&r,M1_PM,0,5);
+    assert(r.sensor_frames[M1_SENSOR_PM].generation==gen);
+    p[29]=1;unsigned sum=0;for(unsigned i=0;i<30;++i)sum+=p[i];p[30]=(uint8_t)(sum>>8);p[31]=(uint8_t)sum;
+    r.pm_armed=true;bytes(M1_PM,p,32,6);while(r.pm_armed)m1_runtime_rx(&r,M1_PM,0,6);
+    assert(r.sensor_frames[M1_SENSOR_PM].flags & M1_FRAME_ERROR);
+    init(0);tick(0,false);tick(1,false);tick(21,false);tick(23,false);
+    assert(r.sensor_frames[M1_SENSOR_SHT_STATUS].length==3);
+    assert(r.sensor_frames[M1_SENSOR_SHT].length==6 && r.sensor_frames[M1_SENSOR_SHT_AUX].length==6);
+    assert(r.sensor_frames[M1_SENSOR_SHT].flags & M1_FRAME_CHECKED);
+    f.aux_crc_bad=true;tick(1000,false);tick(1001,false);tick(1021,false);tick(1023,false);
+    assert(r.sensor_frames[M1_SENSOR_SHT_AUX].length==6);
+    assert(!(r.sensor_frames[M1_SENSOR_SHT_AUX].flags & M1_FRAME_CHECKED));
+    /* Failed status/measurement reads do not overwrite accepted snapshots. */
+    gen=r.sensor_frames[M1_SENSOR_SHT].generation;f.status_crc_bad=true;
+    tick(2000,false);tick(2001,false);
+    assert(r.sensor_frames[M1_SENSOR_SHT].generation==gen);
+    cmd(0x12,1,0,2002);uint8_t meta[7]={0};debug(16,meta,2003);assert(f.last[M1_LINK][4]==2);
+}
+
 static void arithmetic_fuzz(void)
 {
     uint32_t seed=20261024;
@@ -533,7 +580,7 @@ static void arithmetic_fuzz(void)
 }
 int main(void)
 {
-    clock_tests();button_tests();sensors();protocol();display();pm_modes();sensor_cadence();pm_cadence();climate_recovery();colon_tests();tone_tests();music_tests();debug_tests();threshold_tests();debug_stream_fuzz();arithmetic_fuzz();
+    clock_tests();button_tests();sensors();sensor_frame_tests();protocol();display();pm_modes();sensor_cadence();pm_cadence();climate_recovery();colon_tests();tone_tests();music_tests();debug_tests();threshold_tests();debug_stream_fuzz();arithmetic_fuzz();
     puts("runtime: PM dual modes/SHT recovery/PA24/debug/protocol/button/clock/display/buzzer/wraparound PASS");
     puts("climate: 50000 bounded random conversions PASS");
 }

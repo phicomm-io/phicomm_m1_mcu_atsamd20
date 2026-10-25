@@ -172,11 +172,26 @@ bool m1_hcho_raw(const uint8_t f[9], uint16_t *value)
     if (sum) return false;
     *value = be16(f + 2); return true;
 }
-bool m1_pm25_raw(const uint8_t f[32], uint16_t *value)
+bool m1_pm_decode(const uint8_t f[32], m1_pm_frame *decoded)
 {
-    if (f[0] != 0x42 || f[1] != 0x4d || be16(f + 2) != 28 || f[29]) return false;
+    if (f[0] != 0x42 || f[1] != 0x4d || be16(f + 2) != 28) return false;
     uint16_t sum = 0;
     for (unsigned i = 0; i < 30; ++i) sum = (uint16_t)(sum + f[i]);
     if (sum != be16(f + 30)) return false;
-    *value = be16(f + 12); return true;
+    m1_pm_frame next;
+    for (unsigned i=0;i<3;++i) {
+        next.cf1[i]=be16(f+4+2*i);
+        next.atmospheric[i]=be16(f+10+2*i);
+    }
+    for (unsigned i=0;i<6;++i) next.particles[i]=be16(f+16+2*i);
+    next.version=f[28]; next.error=f[29];
+    *decoded=next;
+    return true;
+}
+bool m1_pm25_raw(const uint8_t f[32], uint16_t *value)
+{
+    m1_pm_frame decoded;
+    if (!m1_pm_decode(f,&decoded) || decoded.error) return false;
+    *value=decoded.atmospheric[1];
+    return true;
 }

@@ -106,13 +106,23 @@ static void command(m1_runtime *r,const uint8_t *p,size_t n,uint32_t now)
         if(p[1]==0x0e) { r->buzzer_mode=r->state.buzzer_on?1:0; r->buzzer_at=now; }
     }
 }
+/* Main-loop owned cache. Readers use generation checks to avoid joining
+ * chunks from different acquisitions. Capture never changes sampling cadence. */
+static void capture(m1_runtime *r,unsigned sensor,const uint8_t *p,unsigned n,uint8_t flags,uint32_t now)
+{
+    m1_sensor_frame *f=&r->sensor_frames[sensor];
+    for(unsigned i=0;i<n;++i) f->bytes[i]=p[i];
+    f->length=(uint8_t)n; f->flags=(uint8_t)(flags|M1_FRAME_PRESENT);
+    f->received_at=now; f->generation++;
+}
 static void sample_hcho(m1_runtime *r,const uint8_t *p,uint32_t now)
 {
     unsigned sum=0; for(unsigned i=1;i<9;++i) sum+=p[i];
     if((sum&255)!=0) { bad(r,0); return; }
-    if(p[1]==0x78) { r->hcho_probe=3; r->hcho_at=now; return; }
+    if(p[1]==0x78) { capture(r,M1_SENSOR_HCHO_PROBE,p,9,M1_FRAME_CHECKED,now); r->hcho_probe=3; r->hcho_at=now; return; }
     uint16_t value;
     if(!m1_hcho_raw(p,&value)) { bad(r,0); return; }
+    capture(r,M1_SENSOR_HCHO,p,9,M1_FRAME_CHECKED,now);
     r->hcho_probe=3; r->state.hcho_raw=value;
     good(r,0,now);
 }
@@ -125,18 +135,24 @@ void m1_runtime_pm_mode(m1_runtime *r,uint8_t mode,uint32_t now)
 }
 static bool pm_valid(const uint8_t *p)
 {
-    unsigned sum=0; for(unsigned i=0;i<30;++i) sum+=p[i];
-    return p[0]==0x42 && p[1]==0x4d && p[2]==0 && p[3]==28 &&
-        sum==((unsigned)p[30]<<8|p[31]);
+    m1_pm_frame decoded;
+    return m1_pm_decode(p,&decoded);
 }
 static void sample_pm(m1_runtime *r,const uint8_t *p,uint32_t now,bool warming)
 {
     /* Both stock branches carry the same 32-byte data frame. A valid sensor
      * error frame publishes zero in stock, but must not claim healthy data. */
-    uint16_t value=(uint16_t)((uint16_t)p[12]<<8|p[13]);
+    uint8_t flags=M1_FRAME_CHECKED;
+    if(p[29]) flags|=M1_FRAME_ERROR;
+    if(warming) flags|=M1_FRAME_WARMING;
+    capture(r,M1_SENSOR_PM,p,32,flags,now);
+    m1_pm_frame decoded;
+    (void)m1_pm_decode(p,&decoded);
+    uint16_t value=decoded.atmospheric[1];
     if(p[29]) { bad(r,1); value=0; } else good(r,1,now);
     if(warming) value=0;
     else if(r->pm_mode==3 && r->pm_previous<=149 && value>=1001 && !r->pm_jump) {
+        r->sensor_frames[M1_SENSOR_PM].flags|=M1_FRAME_FILTERED;
         r->pm_jump=true; return;
     } else r->pm_jump=false;
     r->pm_previous=value; r->measured.pm25=value;
@@ -154,6 +170,7 @@ static void pm_rx(m1_runtime *r,uint8_t byte,uint32_t now)
         const uint8_t *p=r->pm_probe_rx;
         if(r->pm_probe_used==8 && p[0]==0x42 && p[1]==0x4d &&
            (p[2]!=0 || p[3]!=28) && p[6]==1 && p[7]==0x74) {
+            capture(r,M1_SENSOR_PM_PROBE,p,8,0,now);
             if(r->pm_mode!=2) { r->pm_mode=2; r->pm_warmup=0; r->pm_jump=false; r->pm_previous=0; }
             r->pm_probing=false; r->rx[M1_PM].used=0; r->pm_armed=true; return;
         }
@@ -239,6 +256,7 @@ static void climate(m1_runtime *r,uint32_t now)
         r->climate_phase=0; r->climate_at=now; return;
     } else if(r->climate_phase==3) {
         if(r->io.i2c(r->io.context,2,0x44,0,0,data,3) && m1_sht_crc(data,2)==data[2]) {
+            capture(r,M1_SENSOR_SHT_STATUS,data,3,M1_FRAME_CHECKED,now);
             r->climate_status=(uint16_t)((uint16_t)data[0]<<8|data[1]);
             r->climate_status_valid=true;
             /* Alert/reset-detected flags are informational. A bad last
@@ -249,9 +267,14 @@ static void climate(m1_runtime *r,uint32_t now)
         }
     } else if(r->climate_phase==1) {
         if(r->io.i2c(r->io.context,2,0x44,0,0,data,6) && m1_sht_raw(data,&r->raw_t,&r->raw_h)) {
+            capture(r,M1_SENSOR_SHT,data,6,M1_FRAME_CHECKED,now);
             if(climate_cmd(r,0x3682)) { r->climate_phase=2; r->climate_at=now+2; return; }
         }
     } else if(r->climate_phase==2 && r->io.i2c(r->io.context,2,0x44,0,0,data,6)) {
+        /* Preserve this original extra response even if its CRC is bad.
+         * Its physical meaning is unknown; do not change stock compensation. */
+        bool checked=m1_sht_crc(data,2)==data[2] && m1_sht_crc(data+3,2)==data[5];
+        capture(r,M1_SENSOR_SHT_AUX,data,6,checked?M1_FRAME_CHECKED:0,now);
         int32_t t; uint32_t rh;
         uint32_t aux=(uint32_t)data[0]<<24|(uint32_t)data[1]<<16|(uint32_t)data[3]<<8|data[4];
         m1_climate next=r->climate;

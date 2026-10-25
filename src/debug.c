@@ -59,7 +59,9 @@ bool m1_debug_command(m1_runtime *r,const uint8_t p[12],uint8_t out[20],uint32_t
     case 0:
         if(!zero(a,7)) goto invalid;
         out[5]=2; put16(out+6,0xffff); put16(out+8,LEASE_MS);
-        out[10]=r->io.buzzer_pwm!=0; break;
+        out[10]=r->io.buzzer_pwm!=0;
+        out[11]=1; out[12]=M1_SENSOR_COUNT; out[13]=9; /* sensor-read schema/count/chunk */
+        break;
     case 1: {
         uint16_t hz=be16(a),ms=be16(a+3);
         if(!zero(a+5,2) || a[2]>100) goto invalid;
@@ -171,6 +173,29 @@ bool m1_debug_command(m1_runtime *r,const uint8_t p[12],uint8_t out[20],uint32_t
         if(!out[4] && a[0]==5){r->debug_buzzer=false;r->music_applied=true;}
         if(!out[4] && a[0]==6)stop_buzzer(r);
         break;
+    case 16: {
+        /* A: sensor, mode(0 metadata/1 data), offset, count, generation(2), 0.
+         * Never issue sensor I/O from a diagnostic request. */
+        if(a[0]>=M1_SENSOR_COUNT || a[1]>1 || a[6]) goto invalid;
+        const m1_sensor_frame *f=&r->sensor_frames[a[0]];
+        out[5]=a[0];
+        if(!a[1]) {
+            if(!zero(a+2,5)) goto invalid;
+            out[6]=f->length; put16(out+7,f->generation);
+            uint32_t age=f->length?now-f->received_at:UINT32_MAX;
+            out[9]=(uint8_t)(age>>24);out[10]=(uint8_t)(age>>16);
+            out[11]=(uint8_t)(age>>8);out[12]=(uint8_t)age;out[13]=f->flags;
+            out[14]=a[0]==M1_SENSOR_PM?r->state.sample.pm25_health:
+                a[0]==M1_SENSOR_HCHO?r->state.sample.hcho_health:
+                a[0]<=M1_SENSOR_SHT_AUX?r->state.sample.climate_health:0;
+            break;
+        }
+        if(!a[3] || a[3]>9 || a[2]>=f->length || a[3]>f->length-a[2]) goto invalid;
+        if(be16(a+4)!=f->generation) { out[4]=5; break; }
+        out[6]=a[2];out[7]=a[3];put16(out+8,f->generation);
+        for(unsigned i=0;i<a[3];++i)out[10+i]=f->bytes[a[2]+i];
+        break;
+    }
     default: out[4]=3; break;
     }
     return true;

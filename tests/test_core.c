@@ -84,6 +84,21 @@ static void sensors(void)
     pm[29] = 0; pm[31] ^= 1; assert(!m1_pm25_raw(pm, &v));
 }
 
+static void full_pm_frames(void)
+{
+    uint8_t p[32]={0x42,0x4d,0,28};
+    for(unsigned i=0;i<12;++i) { unsigned v=257*(i+1);p[4+2*i]=(uint8_t)(v>>8);p[5+2*i]=(uint8_t)v; }
+    p[28]=17;p[29]=3;
+    unsigned sum=0;for(unsigned i=0;i<30;++i)sum+=p[i];p[30]=(uint8_t)(sum>>8);p[31]=(uint8_t)sum;
+    m1_pm_frame d;assert(m1_pm_decode(p,&d));
+    for(unsigned i=0;i<3;++i) {assert(d.cf1[i]==257*(i+1));assert(d.atmospheric[i]==257*(i+4));}
+    for(unsigned i=0;i<6;++i)assert(d.particles[i]==257*(i+7));
+    assert(d.version==17 && d.error==3);
+    uint16_t v=123;assert(!m1_pm25_raw(p,&v) && v==123);
+    m1_pm_frame before=d;p[31]^=1;assert(!m1_pm_decode(p,&d) && !memcmp(&before,&d,sizeof(d)));
+    p[31]^=1;p[3]=27;assert(!m1_pm_decode(p,&d));
+}
+
 static void display(void)
 {
     assert(m1_hcho_group(100) == 2 && m1_hcho_group(101) == 3);
@@ -129,7 +144,7 @@ static void thresholds(void)
 
 int main(void)
 {
-    protocol(); stream(); sensors(); display(); thresholds();
+    protocol(); stream(); sensors(); full_pm_frames(); display(); thresholds();
     assert(m1_stock_crc_byte(0, 0xff) == 0xff);
     puts("PASS: protocol, framing recovery, calendar, sensors, display boundaries");
     return 0;

@@ -20,11 +20,21 @@ typedef struct {
     m1_flash flash;
 } m1_io;
 typedef struct { uint8_t bytes[262]; uint16_t used; uint32_t last; } m1_rx;
+enum { M1_SENSOR_PM, M1_SENSOR_HCHO, M1_SENSOR_SHT, M1_SENSOR_SHT_STATUS,
+       M1_SENSOR_SHT_AUX, M1_SENSOR_HCHO_PROBE, M1_SENSOR_PM_PROBE, M1_SENSOR_COUNT };
+enum { M1_FRAME_PRESENT=1, M1_FRAME_CHECKED=2, M1_FRAME_ERROR=4,
+       M1_FRAME_WARMING=8, M1_FRAME_FILTERED=16 };
+typedef struct {
+    uint8_t bytes[32], length, flags;
+    uint16_t generation;
+    uint32_t received_at;
+} m1_sensor_frame;
 typedef struct { uint32_t last_good,errors,timeouts; uint8_t bad; bool seen,fault; } m1_health;
 typedef struct {
     m1_state state;
     m1_io io;
     m1_rx rx[3];
+    m1_sensor_frame sensor_frames[M1_SENSOR_COUNT];
     m1_health health[3]; /* HCHO, PM, climate */
     /* Acquisition values; state.sample is the stock 3-second reply snapshot.
      * Health flags and state.hcho_raw remain live, like the stock status/0x19. */

@@ -11,7 +11,7 @@
 | 系统 | 启动与 41 项向量、8 MHz 时钟、1 ms SysTick、协作调度、中断、约 8 秒 WDT |
 | 联网通信 | 三路 UART，IRQ 接收/发送队列、帧流恢复、超时、启动/时间/按键/错误通知 |
 | 甲醛 | 初始化探测、周期请求、校验、重试、原始值查询、原厂低值显示处理 |
-| PM2.5 | 32/64 字节接收窗口、两窗口/四帧预热、突变过滤、探测应答与流恢复 |
+| PM2.5 | 完整 PM1.0/PM2.5/PM10 与颗粒计数帧解码、32/64 字节接收窗口、两窗口/四帧预热、突变过滤、探测应答与流恢复 |
 | 温湿度 | I²C/CRC、f32d 状态、限流软复位、原厂定点补偿及显示开关输入 |
 | 显示 | 完整 29 字节 RAM、数字/日期/时间/负号/单位、亮度/开关、全段测试、独立污染物灯色 |
 | RTC | DS1302 兼容三线读写、BCD、日历走时、硬件周期同步、读失败时 RAM 续时 |
@@ -81,3 +81,5 @@ build/analysis-venv/bin/python tools/verify_thresholds_stock.py /path/to/your/m1
 联网模块固件位于 [phicomm-community-firmware](https://github.com/phicomm-io/phicomm-community-firmware)，与本仓库的主控镜像分别升级。
 
 主控 v0.9.3 增加四种提示音、每秒冒号闪烁及一首持久化 [RTTTL 音乐](docs/music.md)。WebUI 与闹钟能力由配套联网固件按版本和能力位开放。
+
+完整传感器帧与电脑只读查询工具见 [传感器帧诊断](docs/sensor-frames.md)。
