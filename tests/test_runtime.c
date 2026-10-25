@@ -449,6 +449,147 @@ static void external_display_tests(void)
         cmd(0x12,1,0,now+2106);debug(18,source,now+2107);assert(f.last[M1_LINK][4]==2);
     }
 }
+static void dual_display_tests(void)
+{
+    const uint32_t origins[]={0,UINT32_MAX-1000};
+    for(unsigned trial=0;trial<2;trial++) {
+        uint32_t now=origins[trial];init(now);tick(now,false);
+        uint8_t h[7]={0,125,1,M1_GROUP_YELLOW,2,0,0};
+        uint8_t pm[7]={1,200,2,M1_GROUP_RED,4,1,0}; /* 45.6 */
+        uint8_t source[7]={1},slot[7]={0};
+        debug(0,0,now);
+        assert(f.last[M1_LINK][5]==2 && f.last[M1_LINK][16]==1);
+        assert(f.last[M1_LINK][17]==1 && f.last[M1_LINK][18]==2);
+        m1_sample measured=r.measured,original=r.state.sample;
+        uint16_t hcho_threshold[2],pm_threshold[2];
+        memcpy(hcho_threshold,r.state.hcho_threshold,sizeof(hcho_threshold));
+        memcpy(pm_threshold,r.state.pm25_threshold,sizeof(pm_threshold));
+        debug(21,h,now);assert(!f.last[M1_LINK][4]);
+        debug(21,pm,now);tick(now,false);
+        assert(!r.external_dual && !memcmp(f.screen,r.display_ram,29));
+        debug(23,slot,now);assert(f.last[M1_LINK][5]==2 && !f.last[M1_LINK][6] && !f.last[M1_LINK][7]);
+        assert(!r.external_dual); /* A read-only probe never takes ownership. */
+        debug(22,source,now);tick(now,false);
+        assert(r.external_dual && r.external_dual_source);
+        assert(f.screen[10]==(0x05|8) && f.screen[9]==0xb3 && f.screen[4]==0xd6);
+        assert(f.screen[24]==0x47 && f.screen[23]==(0xd6|8) && f.screen[22]==0xf6);
+        assert(!(f.screen[21]&0xb5) && !(f.screen[4]&8) && !(f.screen[22]&8));
+        assert((f.screen[18]&0xf5)==0x70 && (f.screen[12]&0xf5)==0x85 && !(f.screen[19]&0xf5));
+        for(unsigned j=0;j<29;j++) {
+            if(j==4||j==9||j==10||j==12||j==18||j==19||j==21||j==22||j==23||j==24)continue;
+            assert(f.screen[j]==r.display_ram[j]);
+        }
+        assert(!memcmp(&measured,&r.measured,sizeof(measured)));
+        assert(!memcmp(&original,&r.state.sample,sizeof(original)));
+        assert(!memcmp(hcho_threshold,r.state.hcho_threshold,sizeof(hcho_threshold)));
+        assert(!memcmp(pm_threshold,r.state.pm25_threshold,sizeof(pm_threshold)) && !r.sensor_alarm_mask);
+        for(unsigned i=0;i<2;i++) {
+            slot[0]=(uint8_t)i;debug(23,slot,now+1);
+            assert(!f.last[M1_LINK][4] && f.last[M1_LINK][5]==2);
+            assert(f.last[M1_LINK][6]==1 && f.last[M1_LINK][7]==1 && f.last[M1_LINK][8]==i);
+            assert(f.last[M1_LINK][9]==(i?1:0) && f.last[M1_LINK][10]==(i?200:125));
+            assert(f.last[M1_LINK][11]==(i?2:1) && f.last[M1_LINK][12]==(i?M1_GROUP_RED:M1_GROUP_YELLOW));
+            assert(f.last[M1_LINK][13]==(i?4:2));
+            for(unsigned j=14;j<19;j++)assert(!f.last[M1_LINK][j]);
+        }
+        source[0]=0;debug(22,source,now+2);tick(now+2,false);
+        assert(!r.external_dual_source && !memcmp(f.screen,r.display_ram,29));
+        source[0]=1;debug(22,source,now+3);tick(now+3,false);
+        assert(f.screen[10]==(0x05|8) && f.screen[23]==(0xd6|8));
+        /* Invalid parameters cannot change either cached lane or selection. */
+        m1_display_lane before[2];memcpy(before,r.external_lanes,sizeof(before));
+        const uint8_t bad[][7]={
+            {3,232,0,0,2,0,0}, {0,1,3,0,2,0,0}, {0,1,7,0,2,0,0},
+            {0,1,8,0,2,0,0}, {0,1,0,4,2,0,0}, {0,1,0,0,61,0,0},
+            {0,1,0,0,2,2,0}, {0,1,0,0,2,0,1}
+        };
+        for(unsigned i=0;i<sizeof(bad)/sizeof(bad[0]);i++) {
+            debug(21,bad[i],now+4);assert(f.last[M1_LINK][4]==1);
+            assert(!memcmp(before,r.external_lanes,sizeof(before)) && r.external_dual_source);
+        }
+        for(unsigned op=22;op<=23;op++)for(unsigned i=0;i<7;i++) {
+            uint8_t bad_source[7]={0};bad_source[i]=i?1:2;
+            debug((uint8_t)op,bad_source,now+4);assert(f.last[M1_LINK][4]==1);
+            assert(!memcmp(before,r.external_lanes,sizeof(before)) && r.external_dual_source);
+        }
+        /* Expiring one lease restores only its original number/legend/lamps. */
+        tick(now+1999,false);assert(r.external_lanes[0].valid && r.external_lanes[1].valid);
+        tick(now+2000,false);assert(!r.external_lanes[0].valid && r.external_lanes[1].valid);
+        assert(r.external_dual_source && f.screen[23]==(0xd6|8));
+        const unsigned hdigits[]={4,9,10};
+        for(unsigned j=0;j<3;j++)assert(f.screen[hdigits[j]]==r.display_ram[hdigits[j]]);
+        assert((f.screen[21]&0x30)==(r.display_ram[21]&0x30));
+        const unsigned lamps[]={12,18,19};
+        for(unsigned j=0;j<3;j++)assert((f.screen[lamps[j]]&0x70)==(r.display_ram[lamps[j]]&0x70));
+        slot[0]=0;debug(23,slot,now+2000);
+        assert(f.last[M1_LINK][6]==1 && !f.last[M1_LINK][7] && !f.last[M1_LINK][13]);
+        debug(21,h,now+2100);tick(now+2100,false);
+        assert(f.screen[10]==(0x05|8) && f.screen[23]==(0xd6|8));
+        /* TTL zero invalidates just one lane without changing global selection. */
+        h[4]=0;debug(21,h,now+2200);tick(now+2200,false);
+        assert(!r.external_lanes[0].valid && r.external_lanes[1].valid && r.external_dual_source);
+        tick(now+4000,false);assert(!r.external_lanes[1].valid && r.external_dual_source);
+        uint8_t actual[29];m1_runtime_display_ram(&r,actual);
+        for(unsigned j=0;j<29;j++)if(j!=0 && j!=3)assert(actual[j]==r.display_ram[j]);
+    }
+}
+static void dual_display_compatibility_tests(void)
+{
+    init(0);tick(0,false);
+    uint8_t legacy[7]={0,200,0,M1_GROUP_GREEN,60,0,0};
+    uint8_t dual[7]={0,123,1,M1_GROUP_YELLOW,60,0,0},source[7]={1};
+    debug(17,legacy,0);debug(18,source,0);tick(0,false);
+    uint8_t old_screen[29];memcpy(old_screen,f.screen,29);
+    debug(21,dual,1);debug(23,0,1);tick(1,false);
+    assert(!r.external_dual && !memcmp(old_screen,f.screen,29));
+    debug(19,0,1);assert(f.last[M1_LINK][5]==1 && f.last[M1_LINK][6]==1 && f.last[M1_LINK][7]==1);
+    debug(22,source,2);tick(2,false);
+    debug(19,0,2);assert(f.last[M1_LINK][6]==1 && !f.last[M1_LINK][7]);
+    /* The old scalar remains one cached value and writes never select profiles. */
+    legacy[1]=201;legacy[5]=1;debug(17,legacy,3);tick(3,false);
+    assert(r.external_dual && f.screen[10]==(0x05|8));
+    debug(18,source,4);tick(4,false);assert(!r.external_dual && f.screen[24]==0xb3);
+    debug(23,0,4);assert(f.last[M1_LINK][6]==1 && !f.last[M1_LINK][7] && !r.external_dual);
+    debug(22,source,5);tick(5,false);assert(r.external_dual && f.screen[10]==(0x05|8));
+    /* A legacy CO2 configuration explicitly recovers ownership as before. */
+    uint8_t cfg[7]={1,0,0,2},co2[7]={3,0xe8,1,0,60};
+    debug(10,cfg,6);debug(12,co2,6);tick(6,false);
+    assert(!r.external_dual && !r.external_source && r.co2_show);
+    assert(f.screen[10]==(0x05|8) && f.screen[9]==0xf5 && f.screen[4]==0xf5);
+    debug(21,dual,7);tick(7,false);assert(r.co2_show && !r.external_dual);
+    debug(22,source,8);tick(8,false);assert(r.external_dual && !r.co2_show);
+    /* All accepted formats remain the original three-digit/legend encoding. */
+    const uint8_t formats[]={0,1,2,4,5,6};
+    for(unsigned i=0;i<sizeof(formats);i++) {
+        dual[0]=3;dual[1]=231;dual[2]=formats[i];dual[3]=(uint8_t)(i%4);
+        dual[5]=(uint8_t)(i%2);debug(21,dual,10+i);assert(!f.last[M1_LINK][4]);
+        tick(10+i,false);
+        unsigned right=dual[5]?22:4;uint8_t legend=dual[5]?0x85:0x30;
+        assert((f.screen[21]&legend)==((formats[i]&4)?legend:0));
+        assert((f.screen[right]&8)==((formats[i]&4)?8:0));
+    }
+    /* User colors and values never become sensor alarm inputs. */
+    hcho(42,17,false);pm(20,17);pm(20,17);pm(20,17);
+    dual[0]=3;dual[1]=231;dual[2]=0;dual[3]=M1_GROUP_RED;
+    dual[5]=0;debug(21,dual,17);dual[5]=1;debug(21,dual,17);
+    uint8_t alarm[7]={1,3};debug(20,alarm,17);tick(18,false);
+    assert(!f.buzz && !r.alarm_latched && r.state.hcho_raw==42 && r.measured.pm25==20);
+    hcho(400,19,false);tick(19,false);assert(f.buzz && r.alarm_latched);
+    uint8_t overlay[7]={100,1,1,0,100};debug(3,overlay,20);tick(20,false);
+    for(unsigned j=0;j<29;j++)assert(f.screen[j]==255);
+    uint8_t raw[7]={4,1,0x42};debug(4,raw,21);tick(21,false);assert(f.screen[4]==0x42);
+    debug(5,0,22);tick(22,false);assert(f.screen[4]!=0x42);
+    r.state.display_test=true;r.dirty=true;tick(23,false);
+    for(unsigned j=0;j<29;j++)assert(f.screen[j]==255);
+    r.state.display_test=false;
+    const m1_display_lane before[2]={r.external_lanes[0],r.external_lanes[1]};
+    bool selected=r.external_dual_source;
+    cmd(0x12,1,0,24);
+    debug(21,dual,25);assert(f.last[M1_LINK][4]==2);
+    source[0]=0;debug(22,source,25);assert(f.last[M1_LINK][4]==2);
+    debug(23,0,25);assert(f.last[M1_LINK][4]==2);
+    assert(!memcmp(before,r.external_lanes,sizeof(before)) && r.external_dual_source==selected);
+}
 static void colon_tests(void)
 {
     const uint32_t origins[]={0,UINT32_MAX-250};
@@ -727,7 +868,7 @@ static void arithmetic_fuzz(void)
 }
 int main(void)
 {
-    clock_tests();button_tests();sensors();sensor_frame_tests();protocol();display();pm_modes();sensor_cadence();pm_cadence();pm_stability();climate_recovery();colon_tests();tone_tests();music_tests();debug_tests();threshold_tests();sensor_alarm_tests();external_display_tests();debug_stream_fuzz();arithmetic_fuzz();
+    clock_tests();button_tests();sensors();sensor_frame_tests();protocol();display();pm_modes();sensor_cadence();pm_cadence();pm_stability();climate_recovery();colon_tests();tone_tests();music_tests();debug_tests();threshold_tests();sensor_alarm_tests();external_display_tests();dual_display_tests();dual_display_compatibility_tests();debug_stream_fuzz();arithmetic_fuzz();
     puts("runtime: PM dual modes/SHT recovery/PA24/debug/protocol/button/clock/display/buzzer/wraparound PASS");
     puts("climate: 50000 bounded random conversions PASS");
 }
