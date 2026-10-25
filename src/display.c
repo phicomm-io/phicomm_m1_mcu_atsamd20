@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "m1/display.h"
 /* Observed seven-segment encodings from stock 0x66a0; bit 3 is separate. */
 static const uint8_t font[10] = {0xf5,0x05,0xb3,0x97,0x47,0xd6,0xf6,0x85,0xf7,0xd7};
@@ -6,6 +6,24 @@ static uint8_t glyph(unsigned n) { return font[n % 10]; }
 static void put(uint8_t *ram, unsigned at, unsigned n) { ram[at] = (ram[at] & 8) | glyph(n); }
 uint8_t m1_display_brightness(uint8_t percent)
 { return percent == 25 ? 0xb1 : percent == 50 ? 0xb7 : percent == 75 ? 0xbb : 0xbf; }
+void m1_display_external(uint8_t ram[M1_DISPLAY_BYTES],uint8_t slot,uint16_t number,
+                         uint8_t format,uint8_t color)
+{
+    unsigned left=slot?24:10,mid=slot?23:9,right=slot?22:4;
+    uint8_t legend=slot?0x85:0x30,mask=slot?0x85:0x70;
+    ram[21]&=(uint8_t)~legend;
+    ram[left]&=(uint8_t)~8;ram[mid]&=(uint8_t)~8;ram[right]&=(uint8_t)~8;
+    put(ram,left,number/100);put(ram,mid,number/10);put(ram,right,number);
+    unsigned decimal=format&3;
+    if(number<100 && decimal!=1)ram[left]=0;
+    if(number<10 && !decimal)ram[mid]=0;
+    if(decimal==1)ram[left]|=8;
+    if(decimal==2)ram[mid]|=8;
+    if(format&4){ram[21]|=legend;ram[right]|=8;}
+    const unsigned offsets[3]={12,19,18};
+    for(unsigned i=0;i<3;i++)ram[offsets[i]]&=(uint8_t)~mask;
+    if(color)ram[color==M1_GROUP_RED?12:color==M1_GROUP_GREEN?19:18]|=mask;
+}
 void m1_display_co2(uint8_t ram[M1_DISPLAY_BYTES],uint8_t slot,uint16_t ppm,const uint16_t thresholds[2])
 {
     unsigned left=slot?24:10,mid=slot?23:9,right=slot?22:4;

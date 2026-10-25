@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT
+/* SPDX-License-Identifier: GPL-3.0-or-later
  * MCU pin IDs, not EMW3080 GPIO numbers. Extracted pinmux, not PCB continuity. */
 #ifndef M1_BOARD_H
 #define M1_BOARD_H

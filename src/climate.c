@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "m1/climate.h"
 #include <limits.h>
 /* Arithmetic floor shift, including negative values, without signed shifts. */

@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "repository": "phicomm-io/iotcloud-community-protocols",
+  "commit": "eb6c4f0aea9b930fd0e84dbcbf40fd5b06595aa6",
+  "registry_sha256": "76a27557349a87b2301b8d33f83d68268814d7b35d6d84131835e6794db6b5b6",
+  "contracts": [
+    "m1-uart-v2",
+    "m1-display-v1",
+    "m1-buttons-v1"
+  ]
+}

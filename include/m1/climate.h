@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #ifndef M1_CLIMATE_H
 #define M1_CLIMATE_H
 #include <stdint.h>

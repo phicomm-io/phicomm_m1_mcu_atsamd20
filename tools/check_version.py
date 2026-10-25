@@ -27,6 +27,7 @@ def resolve_version(root=ROOT, tag=None):
     if Path(git(root, 'rev-parse', '--show-toplevel')).resolve() != root:
         raise ValueError('source directory must be the project Git root')
     commit = git(root, 'rev-parse', 'HEAD')
+    explicit_tag = tag
     dirty = bool(git(root, 'status', '--porcelain', '--untracked-files=normal'))
     if tag:
         if git(root, 'rev-parse', f'refs/tags/{tag}^{{commit}}') != commit:
@@ -43,6 +44,15 @@ def resolve_version(root=ROOT, tag=None):
             except subprocess.CalledProcessError:
                 tag = None
     base = tag[1:] if tag else '0.9.0'
+    target_file = root / 'VERSION'
+    if target_file.is_file():
+        target = target_file.read_text().strip()
+        if not TAG_PATTERN.fullmatch('v' + target):
+            raise ValueError('VERSION must contain MAJOR.MINOR.PATCH')
+        if explicit_tag and target != explicit_tag[1:]:
+            raise ValueError('release tag differs from VERSION')
+        if not explicit_tag and tuple(map(int, target.split('.'))) > tuple(map(int, base.split('.'))):
+            base, tag = target, None
     clean_version = f'{base}-{commit[:6]}'
     version = clean_version + ('-dirty' if dirty else '')
     uart_version = clean_version + ('-d' if dirty else '')
