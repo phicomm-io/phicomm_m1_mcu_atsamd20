@@ -344,11 +344,19 @@ void m1_runtime_display_ram(const m1_runtime *r,uint8_t ram[M1_DISPLAY_BYTES])
     /* Both colon dots share bit 3 with neither digit's seven segments. */
     ram[0]=(uint8_t)((ram[0]&~8u)|(r->colon_on?8u:0));
     ram[3]=(uint8_t)((ram[3]&~8u)|(r->colon_on?8u:0));
-    if(r->co2_show && !r->debug_display)
-        m1_display_co2(ram,r->co2_slot,r->co2_ppm,r->co2_threshold);
-    if(r->external_source && r->external_valid && !r->debug_display)
-        m1_display_external(ram,r->external_slot,r->external_number,
-                            r->external_format,r->external_color);
+    if(r->debug_display) return;
+    if(r->external_dual) {
+        if(r->external_dual_source) for(unsigned i=0;i<2;i++) {
+            const m1_display_lane *lane=&r->external_lanes[i];
+            if(lane->valid) m1_display_external(ram,(uint8_t)i,lane->number,
+                                               lane->format,lane->color);
+        }
+    } else {
+        if(r->co2_show) m1_display_co2(ram,r->co2_slot,r->co2_ppm,r->co2_threshold);
+        if(r->external_source && r->external_valid)
+            m1_display_external(ram,r->external_slot,r->external_number,
+                                r->external_format,r->external_color);
+    }
 }
 static void display(m1_runtime *r,uint32_t now)
 {

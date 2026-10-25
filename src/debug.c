@@ -29,6 +29,12 @@ void m1_debug_poll(m1_runtime *r,uint32_t now)
     if(r->external_valid && due(now,r->external_until)){
         r->external_valid=false;r->dirty=true;
     }
+    for(unsigned i=0;i<2;i++) {
+        m1_display_lane *lane=&r->external_lanes[i];
+        if(lane->valid && due(now,lane->until)) {
+            lane->valid=false;r->dirty=true;
+        }
+    }
     if(r->debug_display && due(now,r->debug_display_until)) {
         r->debug_display=r->debug_raw=false; r->dirty=true;
     }
@@ -67,6 +73,7 @@ bool m1_debug_command(m1_runtime *r,const uint8_t p[12],uint8_t out[20],uint32_t
         out[14]=1; out[15]=0x0f; /* button event schema and supported kinds */
         out[16]=1; /* generic Wi-Fi display schema; operations 0x11..0x13 */
         out[17]=1; /* optional sensor buzzer alarm schema; operation 0x14 */
+        out[18]=2; /* dual-lane Wi-Fi display schema; operations 0x15..0x17 */
         break;
     case 1: {
         uint16_t hz=be16(a),ms=be16(a+3);
@@ -128,7 +135,7 @@ bool m1_debug_command(m1_runtime *r,const uint8_t p[12],uint8_t out[20],uint32_t
     case 10: {
         uint16_t seconds=be16(a+2);
         if(a[0]>2 || a[1]>1 || !seconds || seconds>3600 || !zero(a+4,3))goto invalid;
-        r->external_source=0; /* Legacy client explicitly takes display ownership. */
+        r->external_source=0;r->external_dual=false; /* Legacy display ownership. */
         if(r->co2_mode!=a[0] || r->co2_slot!=a[1] || r->co2_interval!=seconds)r->co2_phase_at=now;
         r->co2_mode=a[0];r->co2_slot=a[1];r->co2_interval=seconds;r->dirty=true;
         m1_co2_poll(r,now);break;
@@ -215,12 +222,13 @@ bool m1_debug_command(m1_runtime *r,const uint8_t p[12],uint8_t out[20],uint32_t
     }
     case 18:
         if(a[0]>1 || !zero(a+1,6))goto invalid;
-        r->external_source=a[0];r->co2_mode=0;r->dirty=true;
+        r->external_source=a[0];r->external_dual=false;r->co2_mode=0;r->dirty=true;
         m1_co2_poll(r,now);break;
     case 19: {
         if(!zero(a,7))goto invalid;
         bool valid=r->external_valid && !due(now,r->external_until);
-        out[5]=1;out[6]=r->external_source;out[7]=r->external_source && valid;
+        out[5]=1;out[6]=r->external_source;
+        out[7]=!r->external_dual && r->external_source && valid;
         out[8]=r->external_slot;put16(out+9,r->external_number);
         out[11]=r->external_format;out[12]=r->external_color;
         out[13]=valid?(uint8_t)((r->external_until-now+999)/1000):0;
@@ -236,6 +244,31 @@ bool m1_debug_command(m1_runtime *r,const uint8_t p[12],uint8_t out[20],uint32_t
         }
         out[5]=1;out[6]=r->sensor_alarm_mask;out[7]=r->alarm_latched;
         break;
+    case 21: {
+        /* Same scalar encoding as OP17, cached independently for both slots. */
+        uint16_t number=be16(a);
+        if(number>999 || (a[2]&~7u) || (a[2]&3)==3 || a[3]>3 ||
+           a[4]>60 || a[5]>1 || a[6])goto invalid;
+        m1_display_lane *lane=&r->external_lanes[a[5]];
+        lane->number=number;lane->format=a[2];lane->color=a[3];
+        lane->valid=a[4]!=0;lane->until=now+(uint32_t)a[4]*1000;
+        r->dirty=true;break;
+    }
+    case 22:
+        if(a[0]>1 || !zero(a+1,6))goto invalid;
+        r->external_dual=true;r->external_dual_source=a[0]!=0;
+        r->co2_mode=0;r->dirty=true;m1_co2_poll(r,now);break;
+    case 23: {
+        if(a[0]>1 || !zero(a+1,6))goto invalid;
+        const m1_display_lane *lane=&r->external_lanes[a[0]];
+        bool valid=lane->valid && !due(now,lane->until);
+        out[5]=2;out[6]=r->external_dual_source;
+        out[7]=r->external_dual && r->external_dual_source && valid;
+        out[8]=a[0];put16(out+9,lane->number);
+        out[11]=lane->format;out[12]=lane->color;
+        out[13]=valid?(uint8_t)((lane->until-now+999)/1000):0;
+        break;
+    }
     default: out[4]=3; break;
     }
     return true;
