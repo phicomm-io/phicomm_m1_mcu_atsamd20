@@ -1,13 +1,14 @@
 {
   "schema": 1,
   "repository": "phicomm-io/iotcloud-community-protocols",
-  "commit": "743796a6dc493e94ec7de90d522a53cc31f33785",
-  "registry_sha256": "900a0c6f14b10d9b737472ca0ee8c970d0faa65a90fb42220749c896b144f1d3",
+  "commit": "875381c01ab615168a693b897cccc71036aa0d81",
+  "registry_sha256": "9413f9484853815c53ab980ce00d1d3686a2f124d874cc5098a486c89ba6b3d9",
   "contracts": [
     "m1-uart-v3",
     "m1-display-v1",
     "m1-buttons-v1",
     "m1-sensor-alarm-v1",
-    "m1-display-v2"
+    "m1-display-v2",
+    "m1-reset-v1"
   ]
 }

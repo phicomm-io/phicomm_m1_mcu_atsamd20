@@ -122,6 +122,10 @@ static void wire_update(size_t length)
     wire(&r,p,n,104);assert(last_reply[1]==0x14 && last_reply[4]==1 && last_reply[5]==2);
     for(unsigned i=2;i<=length/256+1;++i) { n=block(p,i,length);wire(&r,p,n,104+i); }
     assert(r.update.complete && last_reply[1]==0x15 && last_reply[2]==1);
+    /* A physical-reset ACK cannot submit even a fully received OTA image. */
+    const uint8_t reset_ack[12]={0x23,0x72,1,2,1,0,0,0,0,0,0,0x21};
+    wire(&r,reset_ack,sizeof(reset_ack),499);
+    assert(r.update.active && r.update.complete && !r.reset_pending);
     cmd[1]=0x16;cmd[2]=0;wire(&r,cmd,12,500);assert(r.reset_pending);
     unsigned before=resets,low=wifi_low;assert(wifi_on);
     m1_runtime_poll(&r,4499,false);assert(resets==before && wifi_on);

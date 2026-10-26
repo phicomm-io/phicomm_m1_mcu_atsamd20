@@ -55,6 +55,7 @@ typedef struct {
     uint32_t second_at,display_at,display_send_at,climate_at,hcho_at,pm_at,reset_at;
     uint32_t colon_at;
     uint32_t button_at,edge_at,button_click_at,buzzer_at,rx_errors,tx_errors,display_errors,rtc_errors;
+    uint32_t network_reset_at,network_reset_until;
     uint32_t display_retry,pm_probe_until,pm_probe_at,climate_reset_at;
     uint32_t debug_display_until,debug_buzzer_until;
     m1_state debug_state;
@@ -66,8 +67,9 @@ typedef struct {
     uint8_t pm_probe_rx[8],pm_probe_used;
     bool pm_probing,pm_auto,pm_armed,climate_status_valid,climate_reset_due;
     bool debug_display,debug_raw,debug_buzzer;
-    bool button_raw,button_down,button_3s,button_10s,button_click_pending;
-    uint8_t button_sequence;
+    bool button_raw,button_down,button_3s,button_10s,button_click_pending,button_reset;
+    bool network_reset_pending;
+    uint8_t button_sequence,network_reset_kind,network_reset_sequence;
     bool display_ready,display_applied,dirty,reset_pending,low_hcho_seen;
     bool colon_on;
     bool alarm_latched,buzzer_applied;
