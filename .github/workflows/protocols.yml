@@ -9,4 +9,4 @@ permissions:
   contents: read
 jobs:
   contracts:
-    uses: phicomm-io/iotcloud-community-protocols/.github/workflows/validate-consumer.yml@b7343125d2230575c2fe3b29f95a0634f09f4c0a
+    uses: phicomm-io/iotcloud-community-protocols/.github/workflows/validate-consumer.yml@00799a5d78eab0ebff88e79eaaabb8caac64f82c

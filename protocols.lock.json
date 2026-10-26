@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "repository": "phicomm-io/iotcloud-community-protocols",
-  "commit": "b7343125d2230575c2fe3b29f95a0634f09f4c0a",
+  "commit": "00799a5d78eab0ebff88e79eaaabb8caac64f82c",
   "registry_sha256": "675a13313444b7294fa46ccbab42b973532c5c58d3da50e8ad8080565b20f3dd",
   "contracts": [
     "m1-uart-v3",
