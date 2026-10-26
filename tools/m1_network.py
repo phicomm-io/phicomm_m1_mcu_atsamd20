@@ -20,8 +20,8 @@ class Device:
             token = base64.b64encode(('admin:' + password).encode()).decode()
             self.headers['Authorization'] = 'Basic ' + token
 
-    def request(self, path, body=None):
-        conn = http.client.HTTPConnection(self.host, timeout=8)
+    def request(self, path, body=None, *, timeout=8, accepted=(200,)):
+        conn = http.client.HTTPConnection(self.host, timeout=timeout)
         try:
             headers = dict(self.headers)
             if body is not None:
@@ -29,14 +29,24 @@ class Device:
             conn.request('GET' if body is None else 'POST', path, body, headers)
             reply = conn.getresponse()
             data = reply.read()
-            if reply.status != 200:
+            if reply.status not in accepted:
                 raise RuntimeError(f'HTTP {reply.status}: {data[:200]!r}')
             return data
         finally:
             conn.close()
 
     def command(self, action):
-        raw = self.request('/api/v1/command', json.dumps({'action': action, 'params': {}}).encode())
+        for attempt in range(4):
+            try:
+                raw = self.request('/api/v1/command', json.dumps({'action': action, 'params': {}}).encode())
+                break
+            except RuntimeError as error:
+                # Read-only preflight/poll requests may retry admission failures.
+                # Never automatically replay an image upload or commit.
+                if (action not in ('status.get', 'capabilities.get', 'mcu.version.get')
+                        or not str(error).startswith('HTTP 503:') or attempt == 3):
+                    raise
+                time.sleep(.1)
         result = json.loads(raw)
         if result.get('code') != 'ok':
             raise RuntimeError(f'{action}: {result.get("code")}')
@@ -47,7 +57,11 @@ class Device:
         capabilities = self.command('capabilities.get')
         if capabilities.get('model') != 'm1' or status.get('device_id', '').lower() != device_id.lower():
             raise RuntimeError('device identity mismatch')
+        self.capabilities = capabilities
         return status
+
+    def upload_image(self, data):
+        return self.request('/api/v1/mcu/ota', data, timeout=30, accepted=(202,))
 
     def exchange(self, frame):
         response = self.request('/api/v1/mcu/exchange', frame)
@@ -92,38 +106,49 @@ def flash(device, device_id, data, expected_version):
     same_version = current.get('version') == expected_version
     started_at = time.monotonic()
     print('Target:', device_id, 'Wi-Fi:', before['version'], 'MCU:', current['version'], flush=True)
-    packets = list(frames(data))
-    started = committed = False
-    try:
-        for index, packet in enumerate(packets):
-            if packet[1] == 0x16:
-                # Allow UART owner to consume the separate 0x15 completion event.
-                time.sleep(.3)
-            last = None
-            for attempt in range(3):
-                try:
-                    if packet[1] == 0x12:
-                        started = True  # Cancellation also covers a lost begin ACK.
-                    validate_ack(packet, device.exchange(packet))
-                    break
-                except (OSError, RuntimeError, http.client.HTTPException) as error:
-                    last = error
-                    if attempt == 2:
-                        raise
+    limit = getattr(device, 'capabilities', {}).get('mcu_ota_max_bytes', 0)
+    buffered = isinstance(limit, int) and not isinstance(limit, bool) and len(data) <= limit
+    if buffered:
+        # One image request; Wi-Fi validates the vector and locally paces UART.
+        # A lost response must not trigger an automatic second upload.
+        device.upload_image(data)
+        print('Buffered commit transmitted; waiting for MCU reboot/version proof', flush=True)
+    else:
+        if current['version'].startswith(('11.', '17.')):
+            raise RuntimeError('stock MCU requires buffered OTA: update Wi-Fi firmware first, '
+                               'and keep the image within mcu_ota_max_bytes; no data sent')
+        packets = list(frames(data))
+        started = committed = False
+        try:
+            for index, packet in enumerate(packets):
+                if packet[1] == 0x16:
+                    # Allow UART owner to consume the separate 0x15 completion event.
                     time.sleep(.3)
-            if packet[1] == 0x16:
-                committed = True
-                print('Commit transmitted; waiting for MCU reboot/version proof', flush=True)
-            elif packet[1] == 0x13:
-                print(f'Block {index}/{len(packets)-2} acknowledged', flush=True)
-            time.sleep(.03)
-    except BaseException:
-        if started and not committed:
-            try:
-                device.exchange(b'\x23\x16\x01' + bytes(8) + b'\x21')
-            except (OSError, RuntimeError, http.client.HTTPException):
-                pass
-        raise
+                last = None
+                for attempt in range(3):
+                    try:
+                        if packet[1] == 0x12:
+                            started = True  # Cancellation also covers a lost begin ACK.
+                        validate_ack(packet, device.exchange(packet))
+                        break
+                    except (OSError, RuntimeError, http.client.HTTPException) as error:
+                        last = error
+                        if attempt == 2:
+                            raise
+                        time.sleep(.3)
+                if packet[1] == 0x16:
+                    committed = True
+                    print('Commit transmitted; waiting for MCU reboot/version proof', flush=True)
+                elif packet[1] == 0x13:
+                    print(f'Block {index}/{len(packets)-2} acknowledged', flush=True)
+                time.sleep(.03)
+        except BaseException:
+            if started and not committed:
+                try:
+                    device.exchange(b'\x23\x16\x01' + bytes(8) + b'\x21')
+                except (OSError, RuntimeError, http.client.HTTPException):
+                    pass
+            raise
     until = time.monotonic() + 120
     while time.monotonic() < until:
         try:
@@ -157,7 +182,8 @@ def main():
     status = device.identify(args.device_id)
     current = device.command('mcu.version.get')
     print(json.dumps({'device_id': status['device_id'], 'before_mcu': current,
-                      'candidate': meta['uart_version'], 'sha256': meta['sha256'], 'bytes': len(data)}), flush=True)
+                      'candidate': meta['uart_version'], 'sha256': meta['sha256'], 'bytes': len(data),
+                      'mcu_ota_max_bytes': device.capabilities.get('mcu_ota_max_bytes', 0)}), flush=True)
     if args.flash:
         flash(device, args.device_id, data, meta['uart_version'])
 
