@@ -24,6 +24,29 @@ void m1_display_external(uint8_t ram[M1_DISPLAY_BYTES],uint8_t slot,uint16_t num
     for(unsigned i=0;i<3;i++)ram[offsets[i]]&=(uint8_t)~mask;
     if(color)ram[color==M1_GROUP_RED?12:color==M1_GROUP_GREEN?19:18]|=mask;
 }
+void m1_display_formatted(uint8_t ram[M1_DISPLAY_BYTES],uint8_t slot,uint16_t number,
+                          uint8_t format,uint16_t lamps)
+{
+    unsigned left=slot?24:10,mid=slot?23:9,right=slot?22:4;
+    uint8_t legend=slot?0x85:0x30,mask=slot?0x85:0x70;
+    ram[21]&=(uint8_t)~legend;
+    ram[left]&=(uint8_t)~8;ram[mid]&=(uint8_t)~8;ram[right]&=(uint8_t)~8;
+    put(ram,left,number/100);put(ram,mid,number/10);put(ram,right,number);
+    if(format&M1_FORMATTED_DECIMAL)ram[left]|=8;
+    else {
+        if(number<100)ram[left]=0;
+        if(number<10)ram[mid]=0;
+    }
+    if(format&M1_FORMATTED_LABEL)ram[21]|=legend;
+    if(format&M1_FORMATTED_UNIT)ram[right]|=8;
+    static const uint8_t offsets[3]={12,19,18};
+    static const uint8_t positions[2][3]={{0x10,0x20,0x40},{0x80,0x01,0x04}};
+    for(unsigned color=0;color<3;color++) {
+        ram[offsets[color]]&=(uint8_t)~mask;
+        for(unsigned position=0;position<3;position++)
+            if(lamps&(1u<<(color*3+position)))ram[offsets[color]]|=positions[slot][position];
+    }
+}
 void m1_display_co2(uint8_t ram[M1_DISPLAY_BYTES],uint8_t slot,uint16_t ppm,const uint16_t thresholds[2])
 {
     unsigned left=slot?24:10,mid=slot?23:9,right=slot?22:4;

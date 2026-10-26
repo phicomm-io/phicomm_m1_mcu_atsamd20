@@ -12,4 +12,14 @@ void m1_display_co2(uint8_t ram[M1_DISPLAY_BYTES], uint8_t slot, uint16_t ppm,
  * color 0=off/1=red/2=green/3=yellow. No gas conversion or threshold policy. */
 void m1_display_external(uint8_t ram[M1_DISPLAY_BYTES],uint8_t slot,uint16_t number,
                          uint8_t format,uint8_t color);
+enum {
+    M1_FORMATTED_DECIMAL=1,
+    M1_FORMATTED_LABEL=2,
+    M1_FORMATTED_UNIT=4
+};
+/* Formatted profile only: HCHO has a fixed left decimal, PM is integer-only.
+ * Label and original glass unit are independent. Lamp bits 0..2 are red,
+ * 3..5 green, 6..8 yellow; each triplet is physical left/middle/right. */
+void m1_display_formatted(uint8_t ram[M1_DISPLAY_BYTES],uint8_t slot,uint16_t number,
+                          uint8_t format,uint16_t lamps);
 #endif
