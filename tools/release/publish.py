@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 
 from prepare import ASSETS, verify_files
+from check_version import is_stable_release, version_strings
 
 
 def gh(*args, check=True):
@@ -28,8 +29,10 @@ def compare_assets(tag, directory, existing):
 def publish(tag, directory):
     verify_files(directory)
     metadata = json.loads((directory/'release.json').read_text())
-    stable = int(tag[1:].split('.')[0]) >= 1
-    if (metadata['tag'] != tag or metadata['prerelease'] is not (not stable) or
+    stable = is_stable_release(tag)
+    expected = version_strings(tag[1:], metadata['source_commit'])
+    if (metadata['tag'] != tag or metadata['version'] != expected['version'] or
+            metadata['prerelease'] is not (not stable) or
             (stable and metadata.get('hardware_validation') != 'PASS')):
         raise ValueError('release identity/policy mismatch')
     policy = ['--prerelease=false', '--latest=true'] if stable else ['--prerelease', '--latest=false']

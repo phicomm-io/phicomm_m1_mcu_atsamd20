@@ -9,7 +9,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT/'tools'))
-from check_version import resolve_version
+from check_version import is_stable_release, resolve_version, version_strings
 from pack_ota import validate
 from notes import extract
 
@@ -25,7 +25,7 @@ def sha(data):
 
 
 def identity(record, tag, commit):
-    expected = dict(version=f'{tag[1:]}-{commit[:6]}', uart_version=f'{tag[1:]}-{commit[:6]}',
+    expected = dict(**version_strings(tag[1:], commit),
                     base_version=tag[1:], git_tag=tag, git_commit=commit, dirty=False)
     if any(record.get(key) != value for key, value in expected.items()) or record.get('dirty') is not False:
         raise ValueError('artifact version/tag/commit/dirty mismatch')
@@ -80,7 +80,7 @@ def prepare(tag, commit, ota, debug, log, output, acceptance=None):
                 not report['status'].startswith('PASS') or report['gclk2_hz_nominal'] != 1024 or
                 report['wdt_seconds_nominal'] != 8):
             raise ValueError('ARM clock report mismatch')
-    stable = int(tag[1:].split('.')[0]) >= 1
+    stable = is_stable_release(tag)
     if stable:
         if not acceptance:
             raise ValueError('stable MCU release requires matching hardware acceptance')
@@ -113,8 +113,8 @@ def prepare(tag, commit, ota, debug, log, output, acceptance=None):
             archive.writestr(info, contents)
     notes = (f'# {tag}\n\n{body}\n'
              f'### 构建信息\n\n版本：`{record["version"]}`；源码：`{commit}`。\n\n' +
-             ('原厂 11.x 用户可优先使用；17.1.2.3 / 17.x 待镜像分析后再确认兼容性。\n\n' if stable else
-              '本发布为开发预览。\n\n') +
+             ('' if stable else '本发布为开发预览。\n\n') +
+             '原厂 11.x 用户可优先使用；17.1.2.3 / 17.x 待镜像分析后再确认兼容性。\n\n' +
              '### 下载文件\n\n'
              '- `m1-mcu-ota.bin`：ATSAMD20G18A 主控应用，链接于 `0x4000`；不用于 Wi-Fi MCU 更新。\n'
              '- `m1-mcu-ota.json`：版本、来源、长度、SHA-256 及验证状态。\n'

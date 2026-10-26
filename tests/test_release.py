@@ -33,8 +33,20 @@ class NotesTests(unittest.TestCase):
             with self.subTest(log=log, tag=tag), self.assertRaises(ValueError):
                 notes.extract(log, tag)
 
+    def test_rc_and_numbered_rc_sections_use_exact_tag(self):
+        for tag in ('v1.0.0-rc', 'v1.0.0-rc.0', 'v1.0.0-rc.12'):
+            with self.subTest(tag=tag):
+                log = f'## {tag}\n\nThis RC keeps full source and preview identity.\n'
+                self.assertIn('full source', notes.extract(log, tag))
+        for tag in ('v1.0.0-rc1', 'v1.0.0-rc.01', 'v1.0.0-rc+build'):
+            with self.subTest(tag=tag), self.assertRaises(ValueError):
+                notes.extract(f'## {tag}\n\nThis invalid tag cannot be published.\n', tag)
+
 
 class ReleaseFixture(unittest.TestCase):
+    tag = TAG
+    log = LOG
+
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
@@ -43,8 +55,8 @@ class ReleaseFixture(unittest.TestCase):
         self.ota.mkdir()
         self.debug.mkdir()
         self.payload = struct.pack('<II', 0x20008000, 0x4041)+bytes(504)
-        common = dict(version='0.9.1-aaaaaa', uart_version='0.9.1-aaaaaa', base_version='0.9.1',
-                      git_tag=TAG, git_commit=COMMIT, dirty=False, source_commit=COMMIT,
+        common = dict(**prepare.version_strings(self.tag[1:], COMMIT), base_version=self.tag[1:],
+                      git_tag=self.tag, git_commit=COMMIT, dirty=False, source_commit=COMMIT,
                       source_dirty=False, hardware_validation='NOT_RUN', release=False)
         ota = dict(common, bytes=len(self.payload), sha256=prepare.sha(self.payload),
                    target='ATSAMD20G18A', format='raw-samd20-application',
@@ -68,8 +80,21 @@ class ReleaseFixture(unittest.TestCase):
     def write(path, data):
         path.write_text(json.dumps(data))
 
-    def build(self, output=None):
-        return prepare.prepare(TAG, COMMIT, self.ota, self.debug, LOG, output or self.output)
+    def build(self, output=None, acceptance=None):
+        return prepare.prepare(self.tag, COMMIT, self.ota, self.debug, self.log,
+                               output or self.output, acceptance)
+
+    def acceptance(self):
+        path = self.root/'acceptance.json'
+        self.write(path, dict(schema=1, tag=self.tag, source_commit=COMMIT,
+                              hardware_validation='PASS', app_sha256=prepare.sha(self.payload),
+                              boot_sha256=prepare.sha((self.debug/'m1-boot.bin').read_bytes())))
+        return path
+
+    def refresh_checksums(self):
+        (self.output/'SHA256SUMS').write_text(''.join(
+            f'{prepare.sha(path.read_bytes())}  {path.name}\n'
+            for path in sorted(self.output.iterdir()) if path.name != 'SHA256SUMS'))
 
 
 class BundleTests(ReleaseFixture):
@@ -78,7 +103,7 @@ class BundleTests(ReleaseFixture):
         prepare.verify_files(self.output)
         self.assertEqual((self.output/'m1-mcu-ota.bin').read_bytes(), self.payload)
         self.assertEqual(record['hardware_validation'], 'NOT_RUN')
-        self.assertEqual(record['release_log_sha256'], prepare.sha(LOG.encode()))
+        self.assertEqual(record['release_log_sha256'], prepare.sha(self.log.encode()))
         manifest = json.loads((self.output/'m1-mcu-ota.json').read_text())
         self.assertIs(manifest['release'], True)
         self.assertIs(manifest['prerelease'], True)
@@ -96,6 +121,7 @@ class BundleTests(ReleaseFixture):
         path = self.ota/'m1-mcu-ota.json'
         original = json.loads(path.read_text())
         changes = dict(git_commit='b'*40, git_tag='v0.9.0', source_commit='b'*40,
+                       uart_version='11.1.2.3', base_version='wrong',
                        source_dirty=True, dirty=True, bytes=0, sha256='bad',
                        target='wrong', image_signature=True, release=True,
                        hardware_validation='PASS')
@@ -155,7 +181,7 @@ class PublishTests(ReleaseFixture):
         self.addCleanup(self.mock.stop)
 
     def existing(self, draft=False, names=None):
-        self.remote = dict(tagName=TAG, isDraft=draft, isPrerelease=True,
+        self.remote = dict(tagName=self.tag, isDraft=draft, isPrerelease=True,
                            body=(self.output/'notes.md').read_text(),
                            assets=[dict(name=name) for name in sorted(prepare.ASSETS if names is None else names)])
 
@@ -173,7 +199,7 @@ class PublishTests(ReleaseFixture):
         return subprocess.CompletedProcess(args, 0, '')
 
     def test_new_release_is_draft_until_upload_readback(self):
-        publish.publish(TAG, self.output)
+        publish.publish(self.tag, self.output)
         self.assertEqual([c[1] for c in self.calls], ['view', 'create', 'download', 'edit'])
         create, edit = self.calls[1], self.calls[-1]
         for flag in ('--verify-tag', '--draft', '--prerelease', '--latest=false', '--notes-file'):
@@ -183,12 +209,12 @@ class PublishTests(ReleaseFixture):
 
     def test_published_retry_is_read_only(self):
         self.existing()
-        publish.publish(TAG, self.output)
+        publish.publish(self.tag, self.output)
         self.assertEqual([c[1] for c in self.calls], ['view', 'download'])
 
     def test_partial_draft_uploads_only_missing_assets(self):
         self.existing(draft=True, names={'notes.md'})
-        publish.publish(TAG, self.output)
+        publish.publish(self.tag, self.output)
         self.assertEqual([c[1] for c in self.calls], ['view', 'download', 'upload', 'download', 'edit'])
         upload = self.calls[2]
         self.assertNotIn(str(self.output/'notes.md'), upload)
@@ -198,7 +224,7 @@ class PublishTests(ReleaseFixture):
     def test_published_missing_assets_is_not_repaired(self):
         self.existing(names={'notes.md'})
         with self.assertRaisesRegex(ValueError, 'published release is missing'):
-            publish.publish(TAG, self.output)
+            publish.publish(self.tag, self.output)
         self.assertEqual([c[1] for c in self.calls], ['view', 'download'])
 
     def test_different_existing_notes_bytes_or_policy_are_never_overwritten(self):
@@ -210,17 +236,80 @@ class PublishTests(ReleaseFixture):
             else:
                 self.remote[change] = 'other notes' if change == 'body' else False
             with self.subTest(change=change), self.assertRaises(ValueError):
-                publish.publish(TAG, self.output)
+                publish.publish(self.tag, self.output)
             self.assertFalse({'create', 'upload', 'edit'} & {c[1] for c in self.calls})
 
     def test_failed_creation_or_upload_readback_cannot_publish(self):
         self.fail_create = True
         with self.assertRaises(subprocess.CalledProcessError):
-            publish.publish(TAG, self.output)
+            publish.publish(self.tag, self.output)
         self.assertNotIn('edit', [c[1] for c in self.calls])
         self.fail_create = False
         self.calls.clear()
         self.remote_bytes['m1-mcu-ota.bin'] = b'corrupt uploaded bytes'
         with self.assertRaisesRegex(ValueError, 'differs'):
-            publish.publish(TAG, self.output)
+            publish.publish(self.tag, self.output)
         self.assertNotIn('edit', [c[1] for c in self.calls])
+
+
+RC_TAG = 'v1.0.0-rc'
+RC_LOG = '# Releases\n\n## v1.0.0-rc\n\nThis candidate preserves full source identity and preview-only publishing.\n'
+
+
+class RCBundleTests(BundleTests):
+    tag, log = RC_TAG, RC_LOG
+
+    def test_rc_keeps_uart_hash_compatibility_boundary_and_unvalidated_status(self):
+        record = self.build(acceptance=self.acceptance())
+        self.assertIs(record['prerelease'], True)
+        self.assertEqual(record['hardware_validation'], 'NOT_RUN')
+        manifest = json.loads((self.output/'m1-mcu-ota.json').read_text())
+        self.assertEqual(manifest['version'], '1.0.0-rc-aaaaaa')
+        self.assertEqual(manifest['uart_version'], manifest['version'])
+        notes_text = (self.output/'notes.md').read_text()
+        self.assertIn('原厂 11.x', notes_text)
+        self.assertIn('17.1.2.3 / 17.x', notes_text)
+        self.assertEqual((self.output/'m1-mcu-ota.bin').read_bytes(), self.payload)
+
+
+class RCPublishTests(PublishTests):
+    tag, log = RC_TAG, RC_LOG
+
+    def test_numbered_rc_overflow_is_rejected_before_any_publication(self):
+        path = self.output/'release.json'
+        metadata = json.loads(path.read_text())
+        metadata.update(tag='v1.0.0-rc.1', version='1.0.0-rc.1-aaaaaa')
+        self.write(path, metadata)
+        self.refresh_checksums()
+        with self.assertRaisesRegex(ValueError, 'RC version.*16-byte.*not truncated'):
+            publish.publish('v1.0.0-rc.1', self.output)
+        self.assertEqual(self.calls, [])
+
+
+class StableBundleTests(ReleaseFixture):
+    tag = 'v1.0.0'
+    log = '# Releases\n\n## v1.0.0\n\nThis stable fixture requires exact matching hardware acceptance.\n'
+
+    def test_stable_still_requires_exact_hardware_acceptance(self):
+        with self.assertRaisesRegex(ValueError, 'requires matching hardware acceptance'):
+            self.build()
+        acceptance = self.acceptance()
+        evidence = json.loads(acceptance.read_text())
+        self.write(acceptance, dict(evidence, source_commit='b'*40))
+        with self.assertRaisesRegex(ValueError, 'does not match'):
+            self.build(acceptance=acceptance)
+        self.write(acceptance, evidence)
+        record = self.build(acceptance=acceptance)
+        self.assertIs(record['prerelease'], False)
+        self.assertEqual(record['hardware_validation'], 'PASS')
+
+    def test_publisher_refuses_stable_without_hardware_proof(self):
+        self.build(acceptance=self.acceptance())
+        path = self.output/'release.json'
+        metadata = json.loads(path.read_text())
+        self.write(path, dict(metadata, hardware_validation='NOT_RUN'))
+        self.refresh_checksums()
+        with patch.object(publish, 'gh') as remote:
+            with self.assertRaisesRegex(ValueError, 'policy mismatch'):
+                publish.publish(self.tag, self.output)
+            remote.assert_not_called()

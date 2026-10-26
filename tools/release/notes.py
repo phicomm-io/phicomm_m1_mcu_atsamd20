@@ -3,14 +3,18 @@
 import argparse
 from pathlib import Path
 import re
+import sys
 
 ROOT = Path(__file__).resolve().parents[2]
-TAG = re.compile(r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\Z')
+sys.path.insert(0, str(ROOT/'tools'))
+from check_version import TAG_PATTERN
+
+TAG = TAG_PATTERN
 
 
 def extract(text, tag):
     if not TAG.fullmatch(tag):
-        raise ValueError('expected vMAJOR.MINOR.PATCH')
+        raise ValueError('expected vMAJOR.MINOR.PATCH[-rc[.N]]')
     sections = list(re.finditer(r'^##[ \t]+([^\n]+?)[ \t]*$', text, re.M))
     matches = [i for i, section in enumerate(sections) if section[1] == tag]
     if len(matches) != 1:

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Generate one Git version snapshot for firmware and artifact manifests.
 
-Uses the Wi-Fi firmware's vMAJOR.MINOR.PATCH / six-character commit convention.
+Accepts stable and rc / rc.N tags and retains full Git identity in manifests.
 The legacy MCU UART has room for 16 characters, so only its dirty suffix is
-shortened from '-dirty' to '-d'. No tag or hash characters are truncated.
+shortened from '-dirty' to '-d'. Tags and commit suffixes are never truncated;
+an RC tag that does not fit together with the six-character hash is rejected.
 """
 import argparse
 import json
@@ -12,7 +13,43 @@ import re
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
-TAG_PATTERN = re.compile(r'v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)\Z')
+NUMBER = r'(?:0|[1-9][0-9]*)'
+CORE_PATTERN = re.compile(rf'{NUMBER}\.{NUMBER}\.{NUMBER}\Z')
+TAG_PATTERN = re.compile(rf'v(?P<core>{NUMBER}\.{NUMBER}\.{NUMBER})'
+                         rf'(?:-(?P<prerelease>rc(?:\.{NUMBER})?))?\Z')
+
+
+def parse_tag(tag):
+    match = TAG_PATTERN.fullmatch(tag)
+    if not match:
+        raise ValueError('expected release tag vMAJOR.MINOR.PATCH[-rc[.N]]')
+    return match
+
+
+def version_key(tag):
+    match = parse_tag(tag)
+    core = tuple(map(int, match['core'].split('.')))
+    rc = match['prerelease']
+    return core + ((1, 0) if rc is None else (0, -1 if rc == 'rc' else int(rc[3:])))
+
+
+def is_stable_release(tag):
+    match = parse_tag(tag)
+    return int(match['core'].split('.')[0]) >= 1 and match['prerelease'] is None
+
+
+def version_strings(base, commit, dirty=False):
+    match = parse_tag('v' + base)
+    if not re.fullmatch(r'[0-9a-f]{40}', commit):
+        raise ValueError('expected full source commit')
+    clean_version = f'{base}-{commit[:6]}'
+    version = clean_version + ('-dirty' if dirty else '')
+    uart_version = clean_version + ('-d' if dirty else '')
+    if len(uart_version) > 16:
+        label = 'RC version' if match['prerelease'] else 'version'
+        raise ValueError(f'{label} {uart_version} exceeds the 16-byte MCU UART payload; '
+                         'tag and six-character commit hash are not truncated')
+    return dict(version=version, uart_version=uart_version)
 
 
 def git(root, *args):
@@ -22,8 +59,8 @@ def git(root, *args):
 
 def resolve_version(root=ROOT, tag=None):
     root = Path(root).resolve()
-    if tag and not TAG_PATTERN.fullmatch(tag):
-        raise ValueError('expected release tag vMAJOR.MINOR.PATCH')
+    if tag:
+        parse_tag(tag)
     if Path(git(root, 'rev-parse', '--show-toplevel')).resolve() != root:
         raise ValueError('source directory must be the project Git root')
     commit = git(root, 'rev-parse', 'HEAD')
@@ -41,24 +78,26 @@ def resolve_version(root=ROOT, tag=None):
             try:
                 tag = git(root, 'describe', '--tags', '--abbrev=0',
                           *[arg for t in tags for arg in ('--match', t)], 'HEAD')
+                # Keep Git's nearest reachable commit, then order tags on that
+                # commit semantically instead of depending on tag timestamps.
+                same_commit = git(root, 'tag', '--points-at',
+                                  git(root, 'rev-parse', f'refs/tags/{tag}^{{commit}}')).splitlines()
+                tag = max((t for t in same_commit if TAG_PATTERN.fullmatch(t)), key=version_key)
             except subprocess.CalledProcessError:
                 tag = None
     base = tag[1:] if tag else '0.9.0'
     target_file = root / 'VERSION'
     if target_file.is_file():
         target = target_file.read_text().strip()
-        if not TAG_PATTERN.fullmatch('v' + target):
+        if not CORE_PATTERN.fullmatch(target):
             raise ValueError('VERSION must contain MAJOR.MINOR.PATCH')
-        if explicit_tag and target != explicit_tag[1:]:
+        if explicit_tag and target != parse_tag(explicit_tag)['core']:
             raise ValueError('release tag differs from VERSION')
-        if not explicit_tag and tuple(map(int, target.split('.'))) > tuple(map(int, base.split('.'))):
+        target_core = tuple(map(int, target.split('.')))
+        base_core = tuple(map(int, parse_tag('v' + base)['core'].split('.')))
+        if not explicit_tag and target_core > base_core:
             base, tag = target, None
-    clean_version = f'{base}-{commit[:6]}'
-    version = clean_version + ('-dirty' if dirty else '')
-    uart_version = clean_version + ('-d' if dirty else '')
-    if len(uart_version) > 16:
-        raise ValueError(f'version {uart_version} exceeds the 16-byte MCU UART payload')
-    return dict(version=version, uart_version=uart_version, base_version=base,
+    return dict(**version_strings(base, commit, dirty), base_version=base,
                 git_commit=commit, git_tag=tag, dirty=dirty)
 
 

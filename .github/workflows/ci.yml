@@ -101,7 +101,13 @@ jobs:
       - name: Prepare frozen notes and verified release assets
         run: |
           acceptance=()
-          if [[ "$TAG_NAME" != v0.* ]]; then
+          if python3 - "$TAG_NAME" <<'PY'
+          import sys
+          sys.path.insert(0, 'tools')
+          from check_version import is_stable_release
+          sys.exit(0 if is_stable_release(sys.argv[1]) else 1)
+          PY
+          then
             git fetch origin main
             git show "origin/main:docs/release/acceptance/$TAG_NAME.json" > build/hardware-acceptance.json
             acceptance=(--acceptance build/hardware-acceptance.json)
