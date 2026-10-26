@@ -709,6 +709,181 @@ static void dual_display_compatibility_tests(void)
     debug(23,0,25);assert(f.last[M1_LINK][4]==2);
     assert(!memcmp(before,r.external_lanes,sizeof(before)) && r.external_dual_source==selected);
 }
+static void formatted_write(uint8_t slot,uint16_t number,uint8_t format,uint16_t lamps,uint8_t ttl,uint32_t now)
+{
+    uint8_t args[7]={(uint8_t)(number>>8),(uint8_t)number,format,
+                     (uint8_t)(lamps>>8),(uint8_t)lamps,ttl,slot};
+    debug(24,args,now);assert(!f.last[M1_LINK][4]);
+    for(unsigned i=5;i<19;i++)assert(!f.last[M1_LINK][i]);
+}
+static void formatted_query(uint8_t slot,uint32_t now)
+{
+    uint8_t args[7]={slot};debug(26,args,now);
+    assert(!f.last[M1_LINK][4] && f.last[M1_LINK][5]==3 && f.last[M1_LINK][8]==slot);
+    for(unsigned i=16;i<19;i++)assert(!f.last[M1_LINK][i]);
+}
+static void formatted_render_tests(void)
+{
+    /* Independent truth tables for the observed physical left/middle/right bits. */
+    static const uint8_t lamp_bits[2][8]={
+        {0,0x10,0x20,0x30,0x40,0x50,0x60,0x70},
+        {0,0x80,0x01,0x81,0x04,0x84,0x05,0x85}
+    };
+    static const uint8_t offsets[3]={12,19,18},masks[2]={0x70,0x85};
+    for(unsigned slot=0;slot<2;slot++)for(unsigned lamps=0;lamps<512;lamps++) {
+        uint8_t ram[29],expected[29];
+        for(unsigned i=0;i<29;i++)ram[i]=(uint8_t)(i*37+0x5a);
+        memcpy(expected,ram,29);
+        expected[slot?24:10]=0x97;expected[slot?23:9]=0xb3;expected[slot?22:4]=0x05;
+        expected[21]&=(uint8_t)~(slot?0x85:0x30);
+        expected[12]=(uint8_t)((expected[12]&~masks[slot])|lamp_bits[slot][lamps&7]);
+        expected[19]=(uint8_t)((expected[19]&~masks[slot])|lamp_bits[slot][(lamps>>3)&7]);
+        expected[18]=(uint8_t)((expected[18]&~masks[slot])|lamp_bits[slot][lamps>>6]);
+        m1_display_formatted(ram,(uint8_t)slot,321,0,(uint16_t)lamps);
+        assert(!memcmp(ram,expected,29));
+    }
+    static const uint16_t numbers[]={0,1,9,10,99,100,999};
+    static const uint8_t integer_digits[][3]={
+        {0,0,0xf5},{0,0,0x05},{0,0,0xd7},{0,0x05,0xf5},
+        {0,0xd7,0xd7},{0x05,0xf5,0xf5},{0xd7,0xd7,0xd7}
+    };
+    static const uint8_t fixed_digits[][3]={
+        {0xfd,0xf5,0xf5},{0xfd,0xf5,0x05},{0xfd,0xf5,0xd7},{0xfd,0x05,0xf5},
+        {0xfd,0xd7,0xd7},{0x0d,0xf5,0xf5},{0xdf,0xd7,0xd7}
+    };
+    for(unsigned slot=0;slot<2;slot++)for(unsigned decimal=0;decimal<=(slot?0u:1u);decimal++)
+        for(unsigned flags=0;flags<4;flags++)for(unsigned i=0;i<7;i++) {
+            uint8_t ram[29];memset(ram,0xff,29);
+            uint8_t format=(uint8_t)(decimal|(flags<<1));
+            m1_display_formatted(ram,(uint8_t)slot,numbers[i],format,0);
+            const uint8_t *digits=decimal?fixed_digits[i]:integer_digits[i];
+            assert(ram[slot?24:10]==digits[0] && ram[slot?23:9]==digits[1]);
+            assert(ram[slot?22:4]==(uint8_t)(digits[2]|((flags&2)?8:0)));
+            assert(ram[21]==(uint8_t)((0xff&~(slot?0x85:0x30))|((flags&1)?(slot?0x85:0x30):0)));
+            for(unsigned j=0;j<3;j++)assert((ram[offsets[j]]&masks[slot])==0);
+        }
+    puts("formatted display: 1024 lamp maps and 84 fixed-glass digit/legend/unit cases PASS");
+}
+static void formatted_display_tests(void)
+{
+    const uint32_t origins[]={0,UINT32_MAX-1000};
+    for(unsigned trial=0;trial<2;trial++) {
+        uint32_t now=origins[trial];init(now);tick(now,false);
+        debug(0,0,now);assert(f.last[M1_LINK][5]==2 && f.last[M1_LINK][18]==2);
+        formatted_query(0,now);assert(!f.last[M1_LINK][6] && !f.last[M1_LINK][7] && !f.last[M1_LINK][15]);
+        assert(!r.external_formatted && !r.external_dual);
+        m1_sample measured=r.measured,original=r.state.sample;
+        uint16_t thresholds[4];memcpy(thresholds,r.state.hcho_threshold,4);memcpy(thresholds+2,r.state.pm25_threshold,4);
+        formatted_write(0,125,7,0x155,2,now);
+        formatted_write(1,456,4,0x0aa,4,now);tick(now,false);
+        assert(!r.external_formatted && !memcmp(f.screen,r.display_ram,29));
+        formatted_query(0,now);assert(!f.last[M1_LINK][6] && !f.last[M1_LINK][7] && !f.last[M1_LINK][15]);
+        uint8_t source[7]={0};debug(25,source,now);tick(now,false);
+        assert(r.external_formatted && !r.formatted_source && !memcmp(f.screen,r.display_ram,29));
+        formatted_query(0,now);assert(!f.last[M1_LINK][6] && !f.last[M1_LINK][7] && f.last[M1_LINK][15]==1);
+        source[0]=1;debug(25,source,now);tick(now,false);
+        assert(r.external_formatted && r.formatted_source && !r.external_dual);
+        assert(f.screen[10]==0x0d && f.screen[9]==0xb3 && f.screen[4]==0xde);
+        assert(f.screen[24]==0x47 && f.screen[23]==0xd6 && f.screen[22]==0xfe);
+        assert((f.screen[21]&0xb5)==0x30 && !(f.screen[23]&8));
+        assert((f.screen[12]&0xf5)==0x51 && (f.screen[19]&0xf5)==0xa4 && (f.screen[18]&0xf5)==0x51);
+        for(unsigned slot=0;slot<2;slot++) {
+            formatted_query((uint8_t)slot,now+1);
+            assert(f.last[M1_LINK][6]==1 && f.last[M1_LINK][7]==1 && f.last[M1_LINK][15]==1);
+            assert(f.last[M1_LINK][9]==(slot?1:0) && f.last[M1_LINK][10]==(slot?200:125));
+            assert(f.last[M1_LINK][11]==(slot?4:7));
+            assert(f.last[M1_LINK][12]==(slot?0:1) && f.last[M1_LINK][13]==(slot?0xaa:0x55));
+            assert(f.last[M1_LINK][14]==(slot?4:2));
+        }
+        assert(!memcmp(&measured,&r.measured,sizeof(measured)) && !memcmp(&original,&r.state.sample,sizeof(original)));
+        assert(!memcmp(thresholds,r.state.hcho_threshold,4) && !memcmp(thresholds+2,r.state.pm25_threshold,4));
+        assert(!r.sensor_alarm_mask && !f.buzz);
+        const m1_formatted_lane before[2]={r.formatted_lanes[0],r.formatted_lanes[1]};
+        const uint8_t bad[][7]={
+            {3,232,0,0,0,2,0},{0,1,8,0,0,2,0},{0,1,0,2,0,2,0},
+            {0,1,0,0,0,61,0},{0,1,0,0,0,2,2},
+            {0,1,1,0,0,2,1},{0,1,3,0,0,2,1},{0,1,5,0,0,2,1},{0,1,7,0,0,2,1}
+        };
+        for(unsigned i=0;i<sizeof(bad)/sizeof(bad[0]);i++) {
+            debug(24,bad[i],now+4);assert(f.last[M1_LINK][4]==1);
+            assert(!memcmp(before,r.formatted_lanes,sizeof(before)) && r.external_formatted && r.formatted_source);
+        }
+        for(unsigned op=25;op<=26;op++)for(unsigned i=0;i<7;i++) {
+            uint8_t invalid[7]={0};invalid[i]=i?1:2;
+            debug((uint8_t)op,invalid,now+4);assert(f.last[M1_LINK][4]==1);
+            assert(!memcmp(before,r.formatted_lanes,sizeof(before)) && r.external_formatted && r.formatted_source);
+        }
+        tick(now+1999,false);assert(r.formatted_lanes[0].valid && r.formatted_lanes[1].valid);
+        formatted_query(0,now+1999);assert(f.last[M1_LINK][14]==1 && f.last[M1_LINK][7]);
+        tick(now+2000,false);assert(!r.formatted_lanes[0].valid && r.formatted_lanes[1].valid);
+        assert(f.screen[4]==r.display_ram[4] && f.screen[9]==r.display_ram[9] && f.screen[10]==r.display_ram[10]);
+        assert((f.screen[21]&0x30)==(r.display_ram[21]&0x30));
+        const unsigned offsets[]={12,19,18};
+        for(unsigned j=0;j<3;j++)assert((f.screen[offsets[j]]&0x70)==(r.display_ram[offsets[j]]&0x70));
+        assert(f.screen[24]==0x47 && f.screen[23]==0xd6 && f.screen[22]==0xfe);
+        formatted_query(0,now+2000);assert(!f.last[M1_LINK][7] && !f.last[M1_LINK][14] && f.last[M1_LINK][15]==1);
+        formatted_write(0,125,7,0x155,60,now+2100);tick(now+2100,false);
+        assert(r.formatted_lanes[0].valid && f.screen[10]==0x0d);
+        formatted_query(0,now+2100);assert(f.last[M1_LINK][14]==60);
+        formatted_write(0,0,0,0,0,now+2200);tick(now+2200,false);
+        assert(!r.formatted_lanes[0].valid && r.formatted_lanes[1].valid && r.formatted_source);
+        tick(now+4000,false);assert(!r.formatted_lanes[1].valid && r.external_formatted && r.formatted_source);
+        uint8_t actual[29];m1_runtime_display_ram(&r,actual);
+        for(unsigned j=0;j<29;j++)if(j!=0 && j!=3)assert(actual[j]==r.display_ram[j]);
+    }
+}
+static void formatted_compatibility_tests(void)
+{
+    init(0);tick(0,false);
+    uint8_t legacy[7]={0,200,0,M1_GROUP_GREEN,60,0,0};
+    uint8_t dual[7]={0,123,1,M1_GROUP_YELLOW,60,0,0},source[7]={1};
+    debug(17,legacy,0);debug(21,dual,0);formatted_write(0,456,1,7,60,0);
+    debug(18,source,1);tick(1,false);uint8_t legacy_screen[29];memcpy(legacy_screen,f.screen,29);
+    formatted_query(0,1);assert(!f.last[M1_LINK][15] && !f.last[M1_LINK][7]);
+    assert(!r.external_formatted && !r.external_dual && !memcmp(legacy_screen,f.screen,29));
+    debug(22,source,2);tick(2,false);
+    assert(r.external_dual && !r.external_formatted && f.screen[10]==0x0d);
+    debug(25,source,3);tick(3,false);
+    assert(r.external_formatted && !r.external_dual && f.screen[10]==0x4f && f.screen[9]==0xd6 && f.screen[4]==0xf6);
+    debug(19,0,3);assert(f.last[M1_LINK][5]==1 && f.last[M1_LINK][6]==1 && !f.last[M1_LINK][7]);
+    debug(23,0,3);assert(f.last[M1_LINK][5]==2 && f.last[M1_LINK][6]==1 && !f.last[M1_LINK][7]);
+    legacy[1]=201;dual[1]=124;debug(17,legacy,4);debug(21,dual,4);tick(4,false);
+    assert(r.external_formatted && f.screen[4]==0xf6); /* Old writes do not select a profile. */
+    source[0]=0;debug(25,source,5);tick(5,false);
+    assert(r.external_formatted && !r.formatted_source && !memcmp(f.screen,r.display_ram,29));
+    debug(19,0,5);assert(!f.last[M1_LINK][7]);debug(23,0,5);assert(!f.last[M1_LINK][7]);
+    source[0]=1;debug(18,source,6);tick(6,false);
+    assert(!r.external_formatted && !r.external_dual && f.screen[4]==0x05);
+    formatted_query(0,6);assert(!f.last[M1_LINK][7] && !f.last[M1_LINK][15]);
+    debug(25,source,7);tick(7,false);assert(r.external_formatted && f.screen[4]==0xf6);
+    debug(22,source,8);tick(8,false);assert(r.external_dual && !r.external_formatted && f.screen[4]==0x47);
+    formatted_query(0,8);assert(!f.last[M1_LINK][7] && !f.last[M1_LINK][15]);
+    debug(25,source,9);tick(9,false);
+    uint8_t cfg[7]={1,0,0,2},co2[7]={3,0xe8,1,0,60};
+    debug(10,cfg,10);debug(12,co2,10);tick(10,false);
+    assert(!r.external_formatted && !r.external_dual && !r.external_source && r.co2_show);
+    formatted_query(0,10);assert(!f.last[M1_LINK][7] && !f.last[M1_LINK][15]);
+    debug(25,source,11);tick(11,false);assert(r.external_formatted && !r.co2_show);
+    hcho(42,12,false);pm(20,12);pm(20,12);pm(20,12);
+    formatted_write(0,999,1,7,60,13);formatted_write(1,999,0,7,60,13);
+    uint8_t alarm[7]={1,3};debug(20,alarm,13);tick(13,false);
+    assert(!f.buzz && !r.alarm_latched && r.state.hcho_raw==42 && r.measured.pm25==20);
+    hcho(400,14,false);tick(14,false);assert(f.buzz && r.alarm_latched);
+    uint8_t overlay[7]={100,1,1,0,100};debug(3,overlay,15);tick(15,false);
+    for(unsigned j=0;j<29;j++)assert(f.screen[j]==255);
+    uint8_t raw[7]={4,1,0x42};debug(4,raw,16);tick(16,false);assert(f.screen[4]==0x42);
+    debug(5,0,17);tick(17,false);assert(f.screen[4]!=0x42);
+    r.state.display_test=true;r.dirty=true;tick(18,false);
+    for(unsigned j=0;j<29;j++)assert(f.screen[j]==255);
+    r.state.display_test=false;
+    const m1_formatted_lane before[2]={r.formatted_lanes[0],r.formatted_lanes[1]};
+    cmd(0x12,1,0,19);
+    uint8_t write[7]={0,1,0,0,0,1,0};
+    debug(24,write,20);assert(f.last[M1_LINK][4]==2);
+    source[0]=0;debug(25,source,20);assert(f.last[M1_LINK][4]==2);
+    debug(26,0,20);assert(f.last[M1_LINK][4]==2);
+    assert(!memcmp(before,r.formatted_lanes,sizeof(before)) && r.external_formatted && r.formatted_source);
+}
 static void colon_tests(void)
 {
     const uint32_t origins[]={0,UINT32_MAX-250};
@@ -987,7 +1162,7 @@ static void arithmetic_fuzz(void)
 }
 int main(void)
 {
-    clock_tests();button_tests();button_reset_tests();sensors();sensor_frame_tests();protocol();display();pm_modes();sensor_cadence();pm_cadence();pm_stability();climate_recovery();colon_tests();tone_tests();music_tests();debug_tests();threshold_tests();sensor_alarm_tests();external_display_tests();dual_display_tests();dual_display_compatibility_tests();debug_stream_fuzz();arithmetic_fuzz();
+    clock_tests();button_tests();button_reset_tests();sensors();sensor_frame_tests();protocol();display();pm_modes();sensor_cadence();pm_cadence();pm_stability();climate_recovery();colon_tests();tone_tests();music_tests();debug_tests();threshold_tests();sensor_alarm_tests();external_display_tests();dual_display_tests();dual_display_compatibility_tests();formatted_render_tests();formatted_display_tests();formatted_compatibility_tests();debug_stream_fuzz();arithmetic_fuzz();
     puts("runtime: PM dual modes/SHT recovery/PA24/debug/protocol/button/clock/display/buzzer/wraparound PASS");
     puts("climate: 50000 bounded random conversions PASS");
 }

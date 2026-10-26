@@ -38,6 +38,12 @@ typedef struct {
     bool valid;
 } m1_display_lane;
 typedef struct {
+    uint32_t until;
+    uint16_t number,lamps;
+    uint8_t format;
+    bool valid;
+} m1_formatted_lane;
+typedef struct {
     m1_state state;
     m1_io io;
     m1_rx rx[3];
@@ -87,6 +93,9 @@ typedef struct {
     /* Independent dual-lane profile; only an explicit source command selects it. */
     m1_display_lane external_lanes[2];
     bool external_dual,external_dual_source;
+    /* Schema 3 keeps its caches and selection separate from the frozen profiles. */
+    m1_formatted_lane formatted_lanes[2];
+    bool external_formatted,formatted_source;
 } m1_runtime;
 typedef enum { M1_BUZZER_OFF, M1_BUZZER_CONTINUOUS, M1_BUZZER_CHIRP, M1_BUZZER_ALARM } m1_buzzer_mode;
 void m1_runtime_pm_mode(m1_runtime *,uint8_t mode,uint32_t now);

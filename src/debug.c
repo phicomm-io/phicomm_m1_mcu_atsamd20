@@ -34,6 +34,10 @@ void m1_debug_poll(m1_runtime *r,uint32_t now)
         if(lane->valid && due(now,lane->until)) {
             lane->valid=false;r->dirty=true;
         }
+        m1_formatted_lane *formatted=&r->formatted_lanes[i];
+        if(formatted->valid && due(now,formatted->until)) {
+            formatted->valid=false;r->dirty=true;
+        }
     }
     if(r->debug_display && due(now,r->debug_display_until)) {
         r->debug_display=r->debug_raw=false; r->dirty=true;
@@ -135,7 +139,7 @@ bool m1_debug_command(m1_runtime *r,const uint8_t p[12],uint8_t out[20],uint32_t
     case 10: {
         uint16_t seconds=be16(a+2);
         if(a[0]>2 || a[1]>1 || !seconds || seconds>3600 || !zero(a+4,3))goto invalid;
-        r->external_source=0;r->external_dual=false; /* Legacy display ownership. */
+        r->external_source=0;r->external_dual=r->external_formatted=false; /* Legacy display ownership. */
         if(r->co2_mode!=a[0] || r->co2_slot!=a[1] || r->co2_interval!=seconds)r->co2_phase_at=now;
         r->co2_mode=a[0];r->co2_slot=a[1];r->co2_interval=seconds;r->dirty=true;
         m1_co2_poll(r,now);break;
@@ -222,13 +226,13 @@ bool m1_debug_command(m1_runtime *r,const uint8_t p[12],uint8_t out[20],uint32_t
     }
     case 18:
         if(a[0]>1 || !zero(a+1,6))goto invalid;
-        r->external_source=a[0];r->external_dual=false;r->co2_mode=0;r->dirty=true;
+        r->external_source=a[0];r->external_dual=r->external_formatted=false;r->co2_mode=0;r->dirty=true;
         m1_co2_poll(r,now);break;
     case 19: {
         if(!zero(a,7))goto invalid;
         bool valid=r->external_valid && !due(now,r->external_until);
         out[5]=1;out[6]=r->external_source;
-        out[7]=!r->external_dual && r->external_source && valid;
+        out[7]=!r->external_dual && !r->external_formatted && r->external_source && valid;
         out[8]=r->external_slot;put16(out+9,r->external_number);
         out[11]=r->external_format;out[12]=r->external_color;
         out[13]=valid?(uint8_t)((r->external_until-now+999)/1000):0;
@@ -256,7 +260,7 @@ bool m1_debug_command(m1_runtime *r,const uint8_t p[12],uint8_t out[20],uint32_t
     }
     case 22:
         if(a[0]>1 || !zero(a+1,6))goto invalid;
-        r->external_dual=true;r->external_dual_source=a[0]!=0;
+        r->external_dual=true;r->external_formatted=false;r->external_dual_source=a[0]!=0;
         r->co2_mode=0;r->dirty=true;m1_co2_poll(r,now);break;
     case 23: {
         if(a[0]>1 || !zero(a+1,6))goto invalid;
@@ -267,6 +271,31 @@ bool m1_debug_command(m1_runtime *r,const uint8_t p[12],uint8_t out[20],uint32_t
         out[8]=a[0];put16(out+9,lane->number);
         out[11]=lane->format;out[12]=lane->color;
         out[13]=valid?(uint8_t)((lane->until-now+999)/1000):0;
+        break;
+    }
+    case 24: {
+        uint16_t number=be16(a),lamps=be16(a+3);
+        if(number>999 || (a[2]&~7u) || lamps>511 || a[5]>60 || a[6]>1 ||
+           (a[6] && (a[2]&M1_FORMATTED_DECIMAL)))goto invalid;
+        m1_formatted_lane *lane=&r->formatted_lanes[a[6]];
+        lane->number=number;lane->format=a[2];lane->lamps=lamps;
+        lane->valid=a[5]!=0;lane->until=now+(uint32_t)a[5]*1000;
+        r->dirty=true;break;
+    }
+    case 25:
+        if(a[0]>1 || !zero(a+1,6))goto invalid;
+        r->external_formatted=true;r->external_dual=false;r->formatted_source=a[0]!=0;
+        r->co2_mode=0;r->dirty=true;m1_co2_poll(r,now);break;
+    case 26: {
+        if(a[0]>1 || !zero(a+1,6))goto invalid;
+        const m1_formatted_lane *lane=&r->formatted_lanes[a[0]];
+        bool valid=lane->valid && !due(now,lane->until);
+        out[5]=3;out[6]=r->formatted_source;
+        out[7]=r->external_formatted && r->formatted_source && valid;
+        out[8]=a[0];put16(out+9,lane->number);
+        out[11]=lane->format;put16(out+12,lane->lamps);
+        out[14]=valid?(uint8_t)((lane->until-now+999)/1000):0;
+        out[15]=r->external_formatted;
         break;
     }
     default: out[4]=3; break;
