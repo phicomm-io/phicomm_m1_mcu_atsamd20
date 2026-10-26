@@ -358,7 +358,13 @@ void m1_runtime_display_ram(const m1_runtime *r,uint8_t ram[M1_DISPLAY_BYTES])
     ram[0]=(uint8_t)((ram[0]&~8u)|(r->colon_on?8u:0));
     ram[3]=(uint8_t)((ram[3]&~8u)|(r->colon_on?8u:0));
     if(r->debug_display) return;
-    if(r->external_dual) {
+    if(r->external_formatted) {
+        if(r->formatted_source) for(unsigned i=0;i<2;i++) {
+            const m1_formatted_lane *lane=&r->formatted_lanes[i];
+            if(lane->valid) m1_display_formatted(ram,(uint8_t)i,lane->number,
+                                                lane->format,lane->lamps);
+        }
+    } else if(r->external_dual) {
         if(r->external_dual_source) for(unsigned i=0;i<2;i++) {
             const m1_display_lane *lane=&r->external_lanes[i];
             if(lane->valid) m1_display_external(ram,(uint8_t)i,lane->number,
