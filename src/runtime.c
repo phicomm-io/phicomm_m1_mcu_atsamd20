@@ -64,6 +64,18 @@ static void command(m1_runtime *r,const uint8_t *p,size_t n,uint32_t now)
     uint8_t reply[20];
     /* A committed upgrade owns the reset sequence; do not start new work. */
     if(r->reset_pending) return;
+    if(p[1]==0x72) {
+        /* Wi-Fi acknowledges only after persisting the requested reset. A
+         * matching local transaction is required; this is never an OTA commit. */
+        if(n!=12 || p[2]!=1 || p[3]!=r->network_reset_kind || p[4]!=r->network_reset_sequence) return;
+        for(unsigned i=5;i<11;++i) if(p[i]) return;
+        if(r->network_reset_pending && !r->update.active && !due(now,r->network_reset_until)) {
+            r->network_reset_pending=false;
+            r->reset_pending=true; r->reset_phase=0; r->reset_at=now;
+            r->state.display_on=false; r->dirty=true;
+        }
+        return;
+    }
     if(p[1]==0x70) {
         if(r->update.active) { m1_event(0x70,reply); reply[2]=p[2]; reply[3]=p[3]; reply[4]=2; }
         else (void)m1_debug_command(r,p,reply,now);
@@ -71,6 +83,7 @@ static void command(m1_runtime *r,const uint8_t *p,size_t n,uint32_t now)
     }
     if(p[1]==0x12) {
         if(m1_update_begin(&r->update,p[2],p[3],now)) {
+            r->network_reset_pending=false;
             r->music.uploading=false;
             uint8_t leave[12]={0x23,0x70,5,0,0,0,0,0,0,0,0,0x21};
             (void)m1_debug_command(r,leave,reply,now); event(r,0x14);
@@ -416,31 +429,67 @@ static void button_single(m1_runtime *r)
     button_event(r,1,0);r->state.display_test=false;
     m1_button_short(&r->state,reply);(void)send(r,M1_LINK,reply,sizeof(reply));r->dirty=true;
 }
+static void button_reset_send(m1_runtime *r)
+{
+    uint8_t reply[20];m1_event(0x72,reply);
+    reply[2]=1;reply[3]=r->network_reset_kind;reply[4]=r->network_reset_sequence;
+    (void)send(r,M1_LINK,reply,sizeof(reply));
+}
+static void button_network_reset(m1_runtime *r,uint32_t now,uint8_t kind)
+{
+    r->button_reset=true; r->button_click_pending=false;
+    r->network_reset_pending=true; r->network_reset_at=now+500;
+    r->network_reset_until=now+5000;
+    r->network_reset_kind=kind;r->network_reset_sequence++;
+    button_reset_send(r);
+}
+static void button_long(m1_runtime *r,uint32_t held)
+{
+    if(held>=3000 && !r->button_3s) {
+        r->button_3s=true;button_event(r,3,held);event(r,4);
+    }
+}
 static void button(m1_runtime *r,uint32_t now,bool pressed)
 {
     if(r->update.active || r->reset_pending){
         r->button_click_pending=false;r->button_down=r->button_raw=pressed;
         r->button_at=r->edge_at=now;r->button_3s=r->button_10s=false;return;
     }
+    if(r->network_reset_pending) {
+        if(due(now,r->network_reset_until)) r->network_reset_pending=false;
+        else {
+            if(due(now,r->network_reset_at)) {
+                button_reset_send(r); r->network_reset_at=now+500;
+            }
+            /* Do not turn release/repress while waiting into a short click.
+             * A failed transaction requires a fresh hold after release. */
+            r->button_click_pending=false;r->button_down=r->button_raw=pressed;
+            r->button_at=r->edge_at=now;return;
+        }
+    }
     if(r->button_click_pending && (uint32_t)(now-r->button_click_at)>350)button_single(r);
     if(pressed!=r->button_raw) { r->button_raw=pressed; r->edge_at=now; }
     if(now-r->edge_at<20) return;
     if(pressed!=r->button_down) {
         r->button_down=pressed;
-        if(pressed) { r->button_at=r->edge_at; r->button_3s=r->button_10s=false; }
+        if(pressed) { r->button_at=r->edge_at; r->button_3s=r->button_10s=r->button_reset=false; }
         else {
             uint32_t held=r->edge_at-r->button_at;
-            if(held>=60 && held<3000) {
+            if(held>=60 && held<3000 && !r->button_reset) {
                 if(r->button_click_pending){r->button_click_pending=false;button_event(r,2,held);}
                 else {r->button_click_pending=true;r->button_click_at=now;}
-            } else if(held>=9000) event(r,0x18);
+            } else if(held>=3000 && !r->button_reset) {
+                button_long(r,held);
+                if(held>=10000) { r->button_10s=true;button_event(r,4,held); }
+                button_network_reset(r,now,held>=10000?2:1);
+            }
         }
     }
     if(r->button_down) {
         uint32_t held=now-r->button_at;
-        if(held>=3010 && !r->button_3s) { r->button_3s=true;button_event(r,3,held);event(r,4); }
-        if(held>=10000 && !r->button_10s) {
-            r->button_10s=true; r->state.display_test=true; r->dirty=true;button_event(r,4,held);event(r,0x10);
+        button_long(r,held);
+        if(held>=10000 && !r->button_reset) {
+            r->button_10s=true;button_event(r,4,held);button_network_reset(r,now,2);
         }
     }
 }

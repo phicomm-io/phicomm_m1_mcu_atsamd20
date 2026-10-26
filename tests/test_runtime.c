@@ -6,8 +6,9 @@
 #include <string.h>
 typedef struct {
     unsigned commands[3][256],rtc_writes,resets,display_writes,buzz_changes;
+    unsigned button_events[5],wifi_low;
     uint32_t display_times[64],now;
-    uint8_t last[3][32],screen[29];size_t last_size[3];
+    uint8_t last[3][32],screen[29],last_reset[20];size_t last_size[3];
     bool bus_fail,tx_fail,rtc_ok,buzz,status_crc_bad,pwm_fail,wifi,reset_nack,aux_crc_bad;
     uint16_t status,pwm_hz; uint8_t pwm_duty; unsigned status_reads,soft_resets,reset_attempts;
     m1_clock clock;
@@ -16,6 +17,12 @@ static fake f;static m1_runtime r;
 static bool uart(void *ctx,m1_channel c,const uint8_t *p,size_t n)
 {
     fake *v=ctx;assert(n<=32 && n>=2);v->commands[c][p[1]]++;
+    if(c==M1_LINK && p[1]==0x71) { assert(n==20 && p[2]==1 && p[3]>=1 && p[3]<=4);v->button_events[p[3]]++; }
+    if(c==M1_LINK && p[1]==0x72) {
+        assert(n==20 && p[2]==1 && p[3]>=1 && p[3]<=2);
+        for(unsigned i=5;i<19;++i)assert(!p[i]);
+        memcpy(v->last_reset,p,20);
+    }
     memcpy(v->last[c],p,n);v->last_size[c]=n;return !v->tx_fail;
 }
 static bool i2c(void *ctx,unsigned bus,uint8_t addr,const uint8_t *tx,size_t nt,uint8_t *rx,size_t nr)
@@ -46,7 +53,7 @@ static bool rtc_set(void *ctx,const m1_clock *c) { fake *v=ctx;v->clock=*c;v->rt
 static void buzz(void *ctx,bool on) { fake *v=ctx;v->buzz=on;v->buzz_changes++; }
 static bool pwm(void *ctx,uint16_t hz,uint8_t duty)
 { fake *v=ctx;if(v->pwm_fail) return false;v->pwm_hz=hz;v->pwm_duty=duty;return true; }
-static void wifi(void *ctx,bool enabled) { ((fake *)ctx)->wifi=enabled; }
+static void wifi(void *ctx,bool enabled) { fake *v=ctx;v->wifi=enabled;if(!enabled)v->wifi_low++; }
 static void reset(void *ctx) { ((fake *)ctx)->resets++; }
 static void init(uint32_t now)
 {
@@ -97,8 +104,10 @@ static void button_tests(void)
     assert(!r.state.display_on && f.commands[M1_LINK][0x0f]==1);
     tick(1000,true);tick(1020,true);tick(4010,true);tick(4011,true);
     assert(f.commands[M1_LINK][4]==1);tick(11000,true);tick(11001,true);
-    assert(r.state.display_test && f.commands[M1_LINK][0x10]==1);
-    tick(11100,false);tick(11120,false);assert(f.commands[M1_LINK][0x18]==1);
+    assert(!r.state.display_test && !f.commands[M1_LINK][0x10]);
+    assert(f.commands[M1_LINK][0x72]==1 && f.last_reset[3]==2); /* Full reset while held. */
+    tick(11100,false);tick(11120,false);assert(f.commands[M1_LINK][0x72]==1);
+    assert(!f.commands[M1_LINK][0x18]);
     init(UINT32_MAX-300);tick(UINT32_MAX-200,true);tick(UINT32_MAX-180,true);tick(100,false);tick(120,false);
     tick(471,false);
     assert(!r.state.display_on && f.commands[M1_LINK][0x0f]==1);
@@ -116,6 +125,116 @@ static void button_tests(void)
     /* OTA cancels a pending click and consumes physical transitions. */
     init(0);tick(100,true);tick(120,true);tick(200,false);tick(220,false);
     r.update.active=true;tick(600,false);assert(!f.commands[M1_LINK][0x0f]&&!r.button_click_pending);
+    /* A single click remains local, even with no Wi-Fi UART consumer. */
+    init(0);tick(100,true);tick(120,true);tick(160,false);tick(180,false);
+    tick(530,false);assert(!f.commands[M1_LINK][0x0f]);tick(531,false);
+    assert(!r.state.display_on && f.button_events[1]==1 && f.commands[M1_LINK][0x0f]==1);
+    tick(600,true);tick(620,true);tick(660,false);tick(680,false);tick(1031,false);
+    assert(r.state.display_on && f.button_events[1]==2 && f.commands[M1_LINK][0x0f]==2);
+    init(0);tick(100,true);tick(120,true);tick(159,false);tick(179,false);tick(1000,false);
+    assert(r.state.display_on && !f.button_events[1] && !f.commands[M1_LINK][0x0f]);
+    init(0);f.tx_fail=true;tick(100,true);tick(120,true);tick(200,false);tick(220,false);tick(571,false);
+    assert(!r.state.display_on && f.display_writes && !r.display_applied && r.tx_errors);
+    assert(f.button_events[1]==1 && f.commands[M1_LINK][0x0f]==1);
+}
+static void network_reset_reply(uint8_t kind,uint8_t sequence,uint32_t at)
+{
+    uint8_t ack[12]={0x23,0x72,1,kind,sequence,0,0,0,0,0,0,0x21};
+    bytes(M1_LINK,ack,sizeof(ack),at);
+}
+static void button_press(uint32_t at) { tick(at,true);tick(at+20,true); }
+static void button_release(uint32_t at) { tick(at,false);tick(at+20,false); }
+static void button_reset_tests(void)
+{
+    /* Unsolicited acknowledgements never initiate a reset. */
+    init(0);network_reset_reply(1,1,1);tick(1,false);
+    assert(!r.reset_pending && !f.resets && f.wifi && !f.wifi_low);
+    /* Just below 3 seconds remains a short click, with no reset request. */
+    init(0);button_press(100);button_release(3099);tick(3470,false);
+    assert(!f.commands[M1_LINK][0x72] && f.commands[M1_LINK][0x0f]==1);
+    /* A 3-second hold only notifies while held. Release starts reprovisioning. */
+    init(0);button_press(100);tick(3100,true);
+    assert(!f.commands[M1_LINK][0x72] && f.button_events[3]==1 && f.commands[M1_LINK][4]==1);
+    button_release(3100);
+    assert(r.network_reset_pending && !r.reset_pending && f.wifi && !f.resets);
+    assert(f.commands[M1_LINK][0x72]==1 && f.last_reset[3]==1 && f.last_reset[4]==1);
+    assert(!f.button_events[4] && !f.commands[M1_LINK][0x0f]);
+    network_reset_reply(1,1,3130);tick(3130,false);
+    assert(!f.wifi && f.wifi_low==1 && !f.resets);
+    tick(4129,false);assert(!f.resets);tick(4130,false);assert(f.resets==1);
+    /* Releasing just below 10 seconds is still reprovisioning, never full. */
+    init(0);button_press(100);tick(3100,true);button_release(10099);
+    assert(f.commands[M1_LINK][0x72]==1 && f.last_reset[3]==1 && !f.button_events[4]);
+    /* At 10 seconds request a full reset while still held, without all segments. */
+    init(0);button_press(100);tick(10099,true);assert(!f.commands[M1_LINK][0x72]);
+    tick(10100,true);
+    assert(r.network_reset_pending && !r.reset_pending && !r.state.display_test);
+    assert(f.commands[M1_LINK][0x72]==1 && f.last_reset[3]==2 && f.last_reset[4]==1);
+    assert(f.button_events[4]==1 && !f.commands[M1_LINK][0x10] && !f.commands[M1_LINK][0x18]);
+    tick(10110,true);assert(f.commands[M1_LINK][0x72]==1 && f.wifi);
+    uint8_t bad_ack[12]={0x23,0x72,1,2,1,0,0,0,0,0,0,0x21};
+    for(unsigned i=2;i<11;++i) {
+        bad_ack[i]^=1;bytes(M1_LINK,bad_ack,sizeof(bad_ack),10111+i);bad_ack[i]^=1;
+        assert(r.network_reset_pending && !r.reset_pending && f.wifi && !f.resets);
+    }
+    /* The old magic 0x16 acknowledgement cannot authorize physical reset. */
+    const uint8_t old_ack[12]={0x23,0x16,0,0x10,0x14,0,3,0x10,0xf1,0xff,0xff,0x21};
+    bytes(M1_LINK,old_ack,sizeof(old_ack),10125);
+    assert(r.network_reset_pending && !r.reset_pending && f.wifi && !f.resets);
+    network_reset_reply(2,1,10130);assert(r.reset_pending && !r.network_reset_pending);
+    tick(10130,true);assert(!f.wifi && f.wifi_low==1 && !f.resets);
+    network_reset_reply(2,1,10131);tick(11129,true);assert(!f.resets);
+    tick(11130,true);assert(f.resets==1 && f.wifi_low==1);
+    tick(12130,true);assert(f.resets==1 && f.commands[M1_LINK][0x72]==1);
+    /* A release exactly at 10 seconds counts even without a poll held at that instant. */
+    init(0);button_press(100);button_release(10100);
+    assert(r.network_reset_pending && f.commands[M1_LINK][0x72]==1 && f.last_reset[3]==2);
+    tick(10121,false);assert(f.commands[M1_LINK][0x72]==1 && !f.commands[M1_LINK][0x0f]);
+    /* A lost first UART request is retried with the same kind and sequence. */
+    init(0);button_press(100);f.tx_fail=true;tick(10100,true);
+    assert(f.commands[M1_LINK][0x72]==1 && r.tx_errors);
+    uint8_t first[20];memcpy(first,f.last_reset,sizeof(first));
+    f.tx_fail=false;tick(10599,true);assert(f.commands[M1_LINK][0x72]==1);
+    tick(10600,true);assert(f.commands[M1_LINK][0x72]==2 && !memcmp(first,f.last_reset,sizeof(first)));
+    assert(f.button_events[4]==1);
+    network_reset_reply(2,1,10610);tick(10610,false);assert(!f.wifi && f.wifi_low==1);
+    /* Stop after five seconds without cutting power. A release is consumed;
+     * the next physical hold is a new request, with a new sequence. */
+    init(0);button_press(100);tick(10100,true);
+    for(uint32_t at=10600;at<15100;at+=500)tick(at,true);
+    assert(f.commands[M1_LINK][0x72]==10 && f.button_events[4]==1);
+    tick(15100,true);assert(!r.network_reset_pending && !r.reset_pending && f.wifi && !f.resets);
+    network_reset_reply(2,1,15101);assert(!r.reset_pending);
+    button_release(15200);tick(15600,false);assert(!f.commands[M1_LINK][0x0f]);
+    button_press(16000);button_release(19000);
+    assert(r.network_reset_pending && f.commands[M1_LINK][0x72]==11);
+    assert(f.last_reset[3]==1 && f.last_reset[4]==2);
+    network_reset_reply(1,1,19030);network_reset_reply(2,2,19031);
+    assert(!r.reset_pending && r.network_reset_pending && f.wifi);
+    network_reset_reply(1,2,19032);tick(19032,false);assert(!f.wifi && f.wifi_low==1);
+    /* Receipt checks the timeout even before a later poll has expired it. */
+    init(0);button_press(100);tick(10100,true);network_reset_reply(2,1,15100);
+    assert(!r.reset_pending);tick(15100,true);assert(!r.network_reset_pending && f.wifi && !f.resets);
+    /* Sequence zero is valid after byte wrap. */
+    init(0);r.network_reset_sequence=255;button_press(100);button_release(3100);
+    assert(f.last_reset[3]==1 && f.last_reset[4]==0);network_reset_reply(1,0,3130);
+    tick(3130,false);assert(!f.wifi && f.wifi_low==1);
+    /* Reset and power-hold deadlines also work over the 32-bit clock wrap. */
+    const uint32_t start=UINT32_MAX-5000u;
+    init(start);button_press(start);tick(start+9999,true);assert(!f.commands[M1_LINK][0x72]);
+    tick(start+10000,true);assert(f.commands[M1_LINK][0x72]==1);
+    network_reset_reply(2,1,start+10010);tick(start+10010,true);
+    assert(!f.wifi && !f.resets);tick(start+11009,true);assert(!f.resets);
+    tick(start+11010,true);assert(f.resets==1 && f.wifi_low==1);
+    /* OTA owns reset: physical holds and reset ACKs cannot commit the update. */
+    init(0);cmd(0x12,1,0,1);assert(r.update.active);
+    button_press(100);tick(10100,true);network_reset_reply(2,1,10101);
+    assert(r.update.active && !r.reset_pending && !f.commands[M1_LINK][0x72] && f.wifi);
+    /* Starting an upgrade also disarms an already pending physical request. */
+    init(0);button_press(100);tick(10100,true);assert(r.network_reset_pending);
+    cmd(0x12,1,0,10101);assert(r.update.active && !r.network_reset_pending);
+    network_reset_reply(2,1,10102);tick(10600,true);
+    assert(!r.reset_pending && f.commands[M1_LINK][0x72]==1 && f.wifi && !f.resets);
 }
 static void sensors(void)
 {
@@ -868,7 +987,7 @@ static void arithmetic_fuzz(void)
 }
 int main(void)
 {
-    clock_tests();button_tests();sensors();sensor_frame_tests();protocol();display();pm_modes();sensor_cadence();pm_cadence();pm_stability();climate_recovery();colon_tests();tone_tests();music_tests();debug_tests();threshold_tests();sensor_alarm_tests();external_display_tests();dual_display_tests();dual_display_compatibility_tests();debug_stream_fuzz();arithmetic_fuzz();
+    clock_tests();button_tests();button_reset_tests();sensors();sensor_frame_tests();protocol();display();pm_modes();sensor_cadence();pm_cadence();pm_stability();climate_recovery();colon_tests();tone_tests();music_tests();debug_tests();threshold_tests();sensor_alarm_tests();external_display_tests();dual_display_tests();dual_display_compatibility_tests();debug_stream_fuzz();arithmetic_fuzz();
     puts("runtime: PM dual modes/SHT recovery/PA24/debug/protocol/button/clock/display/buzzer/wraparound PASS");
     puts("climate: 50000 bounded random conversions PASS");
 }
