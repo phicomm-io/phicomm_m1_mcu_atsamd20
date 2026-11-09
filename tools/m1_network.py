@@ -124,15 +124,13 @@ def flash(device, device_id, data, expected_version):
                 if packet[1] == 0x16:
                     # Allow UART owner to consume the separate 0x15 completion event.
                     time.sleep(.3)
-                last = None
                 for attempt in range(3):
                     try:
                         if packet[1] == 0x12:
                             started = True  # Cancellation also covers a lost begin ACK.
                         validate_ack(packet, device.exchange(packet))
                         break
-                    except (OSError, RuntimeError, http.client.HTTPException) as error:
-                        last = error
+                    except (OSError, RuntimeError, http.client.HTTPException):
                         if attempt == 2:
                             raise
                         time.sleep(.3)
