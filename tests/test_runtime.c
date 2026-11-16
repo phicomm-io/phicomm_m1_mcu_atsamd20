@@ -9,7 +9,8 @@ typedef struct {
     unsigned button_events[5],wifi_low;
     uint32_t display_times[64],now;
     uint8_t last[3][32],screen[29],last_reset[20];size_t last_size[3];
-    bool bus_fail,tx_fail,rtc_ok,buzz,status_crc_bad,pwm_fail,wifi,reset_nack,aux_crc_bad;
+    bool bus_fail,tx_fail,rtc_ok,buzz,status_crc_bad,pwm_fail,wifi,reset_nack;
+    uint8_t aux_crc_bad;
     uint16_t status,pwm_hz; uint8_t pwm_duty; unsigned status_reads,soft_resets,reset_attempts;
     m1_clock clock;
 } fake;
@@ -40,7 +41,10 @@ static bool i2c(void *ctx,unsigned bus,uint8_t addr,const uint8_t *tx,size_t nt,
         }
         assert(nr==6);rx[0]=0x66;rx[1]=0x66;rx[2]=m1_sht_crc(rx,2);
         rx[3]=0x80;rx[4]=0;rx[5]=m1_sht_crc(rx+3,2);
-        if(v->aux_crc_bad && r.climate_phase==2)rx[5]^=1;
+        if(r.climate_phase==2) {
+            if(v->aux_crc_bad&1)rx[2]^=1;
+            if(v->aux_crc_bad&2)rx[5]^=1;
+        }
     } else {
         assert(nt==2 && ((tx[0]==0x24 && tx[1]==0)||(tx[0]==0x36 && tx[1]==0x82)||
                (tx[0]==0xf3 && tx[1]==0x2d)||(tx[0]==0x30 && tx[1]==0xa2)));
@@ -1142,9 +1146,33 @@ static void sensor_frame_tests(void)
     assert(!(r.sensor_frames[M1_SENSOR_SHT_AUX].flags & M1_FRAME_CHECKED));
     /* Failed status/measurement reads do not overwrite accepted snapshots. */
     gen=r.sensor_frames[M1_SENSOR_SHT].generation;f.status_crc_bad=true;
-    tick(2000,false);tick(2001,false);
+    tick(2023,false);tick(2024,false);
     assert(r.sensor_frames[M1_SENSOR_SHT].generation==gen);
-    cmd(0x12,1,0,2002);uint8_t meta[7]={0};debug(16,meta,2003);assert(f.last[M1_LINK][4]==2);
+    cmd(0x12,1,0,2025);uint8_t meta[7]={0};debug(16,meta,2026);assert(f.last[M1_LINK][4]==2);
+}
+
+static void climate_aux_crc_tests(void)
+{
+    for(unsigned corrupt=1;corrupt<=2;corrupt++) {
+        init(0);tick(0,false);tick(1,false);tick(21,false);tick(23,false);
+        m1_climate accepted=r.climate;
+        int16_t temperature=r.measured.temperature_centi_c;
+        uint16_t humidity=r.measured.humidity_centi_pct;
+        uint16_t generation=r.sensor_frames[M1_SENSOR_SHT_AUX].generation;
+        f.aux_crc_bad=(uint8_t)corrupt;
+        tick(1000,false);tick(1001,false);tick(1021,false);tick(1023,false);
+        assert(!memcmp(&r.climate,&accepted,sizeof(accepted)));
+        assert(r.measured.temperature_centi_c==temperature && r.measured.humidity_centi_pct==humidity);
+        assert(r.health[2].last_good==23 && r.health[2].bad==1 && r.health[2].errors==1);
+        assert(r.climate_phase==0 && r.climate_at==2023 && !r.climate_status_valid);
+        assert(r.sensor_frames[M1_SENSOR_SHT_AUX].generation==generation+1);
+        assert(!(r.sensor_frames[M1_SENSOR_SHT_AUX].flags&M1_FRAME_CHECKED));
+        f.aux_crc_bad=0;
+        tick(2023,false);tick(2024,false);tick(2044,false);tick(2046,false);
+        assert(r.health[2].last_good==2046 && !r.health[2].bad && r.climate_status_valid);
+        assert(r.sensor_frames[M1_SENSOR_SHT_AUX].flags&M1_FRAME_CHECKED);
+        assert(memcmp(&r.climate,&accepted,sizeof(accepted)));
+    }
 }
 
 static void arithmetic_fuzz(void)
@@ -1162,6 +1190,7 @@ static void arithmetic_fuzz(void)
 }
 int main(void)
 {
+    climate_aux_crc_tests();
     clock_tests();button_tests();button_reset_tests();sensors();sensor_frame_tests();protocol();display();pm_modes();sensor_cadence();pm_cadence();pm_stability();climate_recovery();colon_tests();tone_tests();music_tests();debug_tests();threshold_tests();sensor_alarm_tests();external_display_tests();dual_display_tests();dual_display_compatibility_tests();formatted_render_tests();formatted_display_tests();formatted_compatibility_tests();debug_stream_fuzz();arithmetic_fuzz();
     puts("runtime: PM dual modes/SHT recovery/PA24/debug/protocol/button/clock/display/buzzer/wraparound PASS");
     puts("climate: 50000 bounded random conversions PASS");

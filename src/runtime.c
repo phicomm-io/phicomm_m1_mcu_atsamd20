@@ -308,10 +308,11 @@ static void climate(m1_runtime *r,uint32_t now)
             if(climate_cmd(r,0x3682)) { r->climate_phase=2; r->climate_at=now+2; return; }
         }
     } else if(r->climate_phase==2 && r->io.i2c(r->io.context,2,0x44,0,0,data,6)) {
-        /* Preserve this original extra response even if its CRC is bad.
-         * Its physical meaning is unknown; do not change stock compensation. */
+        /* Stock feeds the SHT3x 0x3682 serial number into its thermal model.
+         * Preserve failed responses for diagnostics, never for compensation. */
         bool checked=m1_sht_crc(data,2)==data[2] && m1_sht_crc(data+3,2)==data[5];
         capture(r,M1_SENSOR_SHT_AUX,data,6,checked?M1_FRAME_CHECKED:0,now);
+        if(!checked) { climate_failed(r,now); return; }
         int32_t t; uint32_t rh;
         uint32_t aux=(uint32_t)data[0]<<24|(uint32_t)data[1]<<16|(uint32_t)data[3]<<8|data[4];
         m1_climate next=r->climate;
